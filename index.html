@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stanley数据看板</title>
+<script src="https://cdn.staticfile.org/echarts/5.4.3/echarts.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { overflow-x:hidden; }
+  body { font-family:"Microsoft YaHei","Segoe UI",sans-serif; background:#f5f3ff; color:#1f2937; min-width:1200px; }
+  /* 顶部标题栏 + Tab */
+  .header { background:linear-gradient(135deg,#7c3aed,#5b21b6); color:#fff; padding:14px 28px; box-shadow:0 2px 8px rgba(124,58,237,.3); }
+  .header-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .header h1 { font-size:22px; font-weight:600; display:flex; align-items:center; gap:10px; }
+  .header h1 .dot { width:10px; height:10px; border-radius:50%; background:#c4b5fd; }
+  .header .sub { font-size:12px; opacity:.85; }
+  .tabs { display:flex; gap:4px; }
+  .tab { padding:8px 24px; border-radius:8px 8px 0 0; font-size:14px; font-weight:500; cursor:pointer; background:rgba(255,255,255,.15); color:#ddd6fe; transition:all .2s; }
+  .tab:hover { background:rgba(255,255,255,.25); }
+  .tab.active { background:#f5f3ff; color:#4c1d95; font-weight:600; }
+  /* Tab内容区 */
+  .tab-content { display:none; }
+  .tab-content.active { display:block; }
+  /* 筛选器区 */
+  .filter-bar { background:#fff; padding:14px 28px; display:flex; flex-wrap:wrap; gap:12px; align-items:center; border-bottom:1px solid #ede9fe; position:sticky; top:0; z-index:100; box-shadow:0 2px 6px rgba(124,58,237,.06); }
+  .filter-bar .label { font-size:13px; color:#6b7280; margin-right:-6px; }
+  .mselect { position:relative; }
+  .mselect .trigger { min-width:130px; padding:7px 30px 7px 12px; border:1px solid #ddd6fe; border-radius:8px; background:#faf8ff; font-size:13px; color:#4c1d95; cursor:pointer; user-select:none; white-space:nowrap; position:relative; }
+  .mselect .trigger:hover { border-color:#a78bfa; }
+  .mselect .trigger::after { content:""; position:absolute; right:10px; top:50%; transform:translateY(-30%); border:5px solid transparent; border-top-color:#8b5cf6; }
+  .mselect.open .trigger::after { transform:translateY(-70%) rotate(180deg); }
+  .mselect .panel { display:none; position:absolute; top:calc(100% + 4px); left:0; min-width:180px; max-height:280px; overflow-y:auto; background:#fff; border:1px solid #ddd6fe; border-radius:8px; box-shadow:0 8px 24px rgba(124,58,237,.18); z-index:200; padding:6px; }
+  .mselect.open .panel { display:block; }
+  .mselect .opt { padding:6px 10px; font-size:13px; cursor:pointer; border-radius:6px; display:flex; align-items:center; gap:8px; color:#374151; }
+  .mselect .opt:hover { background:#f5f3ff; }
+  .mselect .opt input { accent-color:#7c3aed; }
+  .mselect .all { border-bottom:1px solid #ede9fe; margin-bottom:4px; padding-bottom:6px; font-weight:600; color:#7c3aed; }
+  .btn-reset { padding:7px 16px; border:1px solid #ddd6fe; border-radius:8px; background:#fff; color:#7c3aed; font-size:13px; cursor:pointer; }
+  .btn-reset:hover { background:#f5f3ff; }
+  .btn-export { padding:7px 16px; border:none; border-radius:8px; background:linear-gradient(135deg,#7c3aed,#6d28d9); color:#fff; font-size:13px; cursor:pointer; }
+  .btn-export:hover { opacity:.9; }
+  .filter-count { font-size:12px; color:#9ca3af; margin-left:auto; }
+  .src-tabs { display:flex; gap:6px; }
+  .src-tab { padding:6px 14px; border-radius:6px; font-size:12px; cursor:pointer; background:#ede9fe; color:#6d28d9; font-weight:500; }
+  .src-tab.active { background:#7c3aed; color:#fff; }
+  .date-quick { display:flex; gap:4px; }
+  .date-quick button { padding:4px 10px; border:1px solid #ddd6fe; border-radius:6px; background:#fff; color:#7c3aed; font-size:12px; cursor:pointer; }
+  .date-quick button:hover { background:#f5f3ff; }
+  .date-input { padding:6px 8px; border:1px solid #ddd6fe; border-radius:6px; font-size:12px; color:#4c1d95; }
+  /* KPI 卡片 (Tab1/Tab2用) */
+  .kpi-row { display:grid; gap:14px; padding:20px 28px; }
+  .kpi-row.g6 { grid-template-columns:repeat(6,1fr); }
+  .kpi-row.g5 { grid-template-columns:repeat(5,1fr); }
+  .kpi-row.g7 { grid-template-columns:repeat(7,1fr); }
+  #t3-kpiRow.kpi-row { grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); }
+  .kpi { background:#fff; border-radius:14px; padding:18px 20px; box-shadow:0 2px 10px rgba(124,58,237,.08); border:1px solid #f3f0ff; position:relative; overflow:hidden; }
+  .kpi::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:linear-gradient(#7c3aed,#c4b5fd); }
+  .kpi .k-label { font-size:13px; color:#6b7280; margin-bottom:8px; }
+  .kpi .k-value { font-size:26px; font-weight:700; color:#4c1d95; }
+  .kpi .k-sub { font-size:12px; color:#9ca3af; margin-top:4px; }
+  .kpi .k-sub .up { color:#dc2626; }
+  .kpi .k-sub .ok { color:#059669; }
+  .kpi.clickable { cursor:pointer; }
+  .kpi.clickable:hover { box-shadow:0 4px 16px rgba(124,58,237,.15); }
+/* KPI 卡片 (Tab3价格看板原版样式) */
+.kpi-card {
+    background: white;
+    border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: 0 4px 18px rgba(102, 126, 234, 0.08);
+    border-left: 4px solid #667eea;
+    transition: transform 0.25s;
+}
+.kpi-card:hover { transform: translateY(-3px); }
+.kpi-card .label { font-size: 12px; color: #888; margin-bottom: 6px; }
+.kpi-card .value { font-size: 24px; font-weight: 700; color: #4a4a6a; }
+.kpi-card .unit { font-size: 13px; color: #999; margin-left: 4px; font-weight: 400; }
+.kpi-card .sub { font-size: 11px; color: #aaa; margin-top: 6px; }
+/* 原版 section-title */
+.section-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: #4a4a6a;
+    margin: 8px 0 14px 0;
+    padding-left: 12px;
+    border-left: 4px solid #667eea;
+}
+.section-title .hint { font-size: 12px; font-weight: 400; color: #999; margin-left: 8px; }
+/* Tab3 subtabs (原版风格) */
+#tab3 .subtabs { display:flex; gap:8px; margin:0 28px 20px; background:#fff; padding:8px; border-radius:14px; box-shadow:0 4px 18px rgba(0,0,0,0.06); flex-wrap:wrap; }
+#tab3 .subtab { padding:10px 22px; border:none; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; transition:all 0.25s; background:transparent; color:#666; }
+#tab3 .subtab:hover { background:#f0eef9; color:#667eea; }
+#tab3 .subtab.active { background:linear-gradient(135deg,#667eea,#764ba2); color:#fff; box-shadow:0 4px 14px rgba(102,126,234,0.35); }
+/* type-pill / price-cell */
+.type-pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; color:#fff; font-weight:600; }
+.price-cell { color:#667eea; font-weight:700; }
+.muted { color:#aaa; }
+  /* 图表网格 */
+  .charts { display:grid; grid-template-columns:repeat(2,1fr); gap:16px; padding:0 28px 20px; }
+  .chart-card { background:#fff; border-radius:14px; padding:16px 18px; box-shadow:0 2px 10px rgba(124,58,237,.07); border:1px solid #f3f0ff; }
+  .chart-card .ctitle { font-size:15px; font-weight:600; color:#4c1d95; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
+  .chart-card .ctitle::before { content:""; width:4px; height:16px; background:#7c3aed; border-radius:2px; }
+  .chart-card .ctitle .zoom { margin-left:auto; font-size:11px; color:#a78bfa; cursor:pointer; }
+  .chart-box { width:100%; height:320px; }
+  /* 明细表 */
+  .detail { margin:0 28px 28px; background:#fff; border-radius:14px; padding:16px 18px; box-shadow:0 2px 10px rgba(124,58,237,.07); border:1px solid #f3f0ff; }
+  .detail .ctitle { font-size:15px; font-weight:600; color:#4c1d95; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .detail .ctitle::before { content:""; width:4px; height:16px; background:#7c3aed; border-radius:2px; }
+  .detail .toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+  .detail input[type=text] { padding:7px 12px; border:1px solid #ddd6fe; border-radius:8px; font-size:13px; width:240px; outline:none; }
+  .detail input[type=text]:focus { border-color:#a78bfa; }
+  .detail select { padding:7px 10px; border:1px solid #ddd6fe; border-radius:8px; font-size:13px; background:#faf8ff; color:#4c1d95; outline:none; }
+  .detail table { width:100%; border-collapse:collapse; font-size:13px; }
+  .detail thead th { background:#f5f3ff; color:#4c1d95; padding:10px 8px; text-align:left; font-weight:600; position:sticky; top:0; cursor:pointer; white-space:nowrap; border-bottom:2px solid #ddd6fe; }
+  .detail thead th:hover { background:#ede9fe; }
+  .detail thead th .arrow { font-size:10px; color:#a78bfa; margin-left:4px; }
+  .detail tbody td { padding:8px; border-bottom:1px solid #f3f0ff; color:#374151; white-space:nowrap; }
+  .detail tbody tr:hover { background:#faf8ff; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+  .tag-green { background:#d1fae5; color:#059669; }
+  .tag-blue { background:#dbeafe; color:#1d4ed8; }
+  .tag-orange { background:#fed7aa; color:#c2410c; }
+  .tag-red { background:#fee2e2; color:#dc2626; }
+  .tag-purple { background:#ede9fe; color:#6d28d9; }
+  .pager { display:flex; gap:6px; align-items:center; justify-content:flex-end; margin-top:12px; font-size:13px; color:#6b7280; }
+  .pager button { padding:5px 11px; border:1px solid #ddd6fe; background:#fff; border-radius:6px; cursor:pointer; color:#4c1d95; font-size:13px; }
+  .pager button:hover:not(:disabled) { background:#f5f3ff; }
+  .pager button:disabled { opacity:.4; cursor:not-allowed; }
+  .pager .info { margin:0 8px; }
+  .empty { text-align:center; padding:40px; color:#9ca3af; font-size:14px; }
+  /* Tab3 物流商卡片 */
+  .provider-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:12px; margin-top:12px; }
+  .provider-card { background:linear-gradient(135deg,#faf8ff 0%,#f3e8ff 100%); border:1px solid #ede9fe; border-radius:12px; padding:12px 14px; cursor:pointer; transition:all .2s; }
+  .provider-card:hover { box-shadow:0 4px 16px rgba(124,58,237,.15); transform:translateY(-1px); }
+  .pc-name { font-weight:600; color:#4c1d95; font-size:14px; margin-bottom:8px; display:flex; align-items:center; gap:6px; }
+  .pc-stats { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:12px; color:#6b7280; margin-bottom:4px; }
+  .pc-stats b { color:#374151; }
+  .pc-bar { height:4px; background:#ede9fe; border-radius:2px; margin-top:8px; overflow:hidden; }
+  .pc-bar-fill { height:100%; background:linear-gradient(90deg,#7c3aed,#a78bfa); border-radius:2px; }
+  /* Tab3 物流商卡片 (匹配原版) */
+  .provider-card { background:#fff; border:1px solid #ede9fe; border-radius:12px; padding:14px 16px; transition:all .25s; }
+  .provider-card:hover { box-shadow:0 8px 28px rgba(102,126,234,.15); transform:translateY(-2px); }
+  .pc-head { display:flex; align-items:center; gap:8px; margin-bottom:10px; cursor:pointer; }
+  .pc-head .icon { font-size:20px; }
+  .pc-head .name { font-size:17px; font-weight:700; color:#2c2c3e; }
+  .pc-head .type-tag { font-size:11px; padding:2px 8px; border-radius:10px; color:#fff; font-weight:600; }
+  .pc-head .expand-icon { margin-left:auto; font-size:12px; color:#999; transition:transform .3s; }
+  .provider-card.expanded .expand-icon { transform:rotate(180deg); }
+  .pc-metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:10px; }
+  .pc-metric { text-align:center; padding:8px 4px; background:#f8f7fc; border-radius:8px; }
+  .pc-metric .v { font-size:14px; font-weight:700; color:#4a4a6a; }
+  .pc-metric .l { font-size:10px; color:#999; margin-top:2px; }
+  .pc-metric.price .v { color:#667eea; }
+  .pc-meta { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; font-size:11px; color:#888; }
+  .pc-meta .chip { background:#f0eef9; padding:3px 8px; border-radius:10px; color:#555; }
+  .pc-meta .chip.warn { background:#fff3e0; color:#e65100; }
+  .pc-meta .chip.good { background:#e8f5e9; color:#2e7d32; }
+  .pc-cost-row { display:flex; gap:0; margin-bottom:10px; border-radius:8px; overflow:hidden; border:1px solid #ede9fe; }
+  .pc-cost-row .cost-item { flex:1; text-align:center; padding:6px 4px; background:#f8f7fc; border-right:1px solid #ede9fe; }
+  .pc-cost-row .cost-item:last-child { border-right:none; }
+  .pc-cost-row .cost-item.total { background:#ede9fe; }
+  .pc-cost-row .cost-l { display:block; font-size:10px; color:#999; margin-bottom:2px; }
+  .pc-cost-row .cost-v { display:block; font-size:13px; font-weight:700; color:#4a4a6a; }
+  .pc-cost-row .cost-item.total .cost-v { color:#5b21b6; }
+  .pc-decision { margin-top:8px; padding:6px 10px; border-radius:8px; font-size:12px; font-weight:600; text-align:center; }
+  .pc-decision.recommend { background:#e8f5e9; color:#2e7d32; }
+  .pc-decision.warn { background:#fff3e0; color:#e65100; }
+  .pc-decision.info { background:#e3f2fd; color:#1565c0; }
+  .pc-detail { margin-top:12px; padding-top:12px; border-top:1px dashed #e0e0ee; display:none; }
+  .provider-card.expanded .pc-detail { display:block; animation:fadeIn .3s; }
+  .pc-detail-title { font-size:12px; color:#888; margin-bottom:8px; font-weight:600; }
+  .product-row { display:grid; grid-template-columns:1.5fr 0.8fr 0.8fr 0.8fr 1fr 0.6fr; gap:8px; padding:8px 10px; border-radius:8px; cursor:pointer; transition:background .2s; font-size:12px; align-items:center; }
+  .product-row:hover { background:#f0eef9; }
+  .product-row.header { background:#f8f7fc; font-weight:600; color:#666; cursor:default; font-size:11px; }
+  .product-row .prod-name { font-weight:600; color:#2c2c3e; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .product-row .price { color:#667eea; font-weight:700; }
+  .product-row .click-hint { font-size:10px; color:#aaa; text-align:right; }
+  .product-row:hover .click-hint { color:#667eea; }
+  .type-pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; color:#fff; font-weight:600; }
+  .price-cell { color:#667eea; font-weight:700; }
+  .muted { color:#aaa; }
+  .arrow { font-size:10px; margin-left:3px; color:#7c3aed; }
+  /* Tab3 交叉表 */
+  .cross-table { width:100%; border-collapse:collapse; font-size:12px; margin-top:12px; }
+  .cross-table th, .cross-table td { border:1px solid #ede9fe; padding:6px 8px; text-align:center; }
+  .cross-table th { background:#f5f3ff; color:#4c1d95; font-weight:600; }
+  .cross-table td:hover { background:#faf8ff; }
+  .rate-cell { display:flex; flex-direction:column; align-items:center; gap:2px; min-width:80px; }
+  .rate-bar-bg { width:100%; height:6px; background:#ede9fe; border-radius:3px; overflow:hidden; }
+  .rate-bar { height:100%; border-radius:3px; transition:width .3s; }
+  .rate-text { font-size:13px; font-weight:600; }
+  .rate-sub { font-size:11px; color:#9ca3af; }
+  .pct-bar { display:flex; align-items:center; gap:6px; min-width:90px; }
+  .pct-bar .pct-fill { height:8px; border-radius:4px; background:linear-gradient(90deg,#7c3aed,#a78bfa); min-width:2px; transition:width .3s; }
+  .pct-bar span { font-size:11px; color:#6b7280; white-space:nowrap; }
+  /* Tab3 KPI g10 */
+  .kpi-row.g10 { grid-template-columns:repeat(5,1fr); }
+  /* Tab3 子选项卡 */
+  .subtabs { display:flex; gap:6px; padding:12px 28px 0; flex-wrap:wrap; }
+  .subtab { padding:8px 18px; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; background:#ede9fe; color:#6d28d9; transition:all .2s; border:none; }
+  .subtab:hover { background:#ddd6fe; }
+  .subtab.active { background:linear-gradient(135deg,#7c3aed,#6d28d9); color:#fff; }
+  .subpanel { display:none; }
+  .subpanel.active { display:block; animation:fadeIn .3s; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} }
+  /* Tab3 运输类型总览卡片 */
+  .transport-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; margin:0 28px 20px; }
+  .transport-card { background:#fff; border-radius:14px; padding:18px 20px; box-shadow:0 2px 10px rgba(124,58,237,.07); border:1px solid #f3f0ff; border-top:4px solid #7c3aed; }
+  .transport-card .tc-head { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+  .transport-card .tc-head .tc-icon { font-size:20px; }
+  .transport-card .tc-head .tc-name { font-size:16px; font-weight:700; color:#1f2937; }
+  .transport-card .tc-head .tc-avg { margin-left:auto; font-size:20px; font-weight:700; color:#7c3aed; }
+  .transport-card .tc-head .tc-avg-sub { font-size:11px; color:#9ca3af; }
+  .transport-card .tc-stats { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }
+  .transport-card .tc-stat { background:#faf8ff; padding:8px 6px; border-radius:8px; text-align:center; }
+  .transport-card .tc-stat .v { font-size:14px; font-weight:700; color:#4c1d95; }
+  .transport-card .tc-stat .l { font-size:10px; color:#9ca3af; margin-top:2px; }
+  /* Tab3 洞察面板 */
+  .two-col { display:grid; grid-template-columns:1.4fr 1fr; gap:16px; padding:0 28px 20px; }
+  .insight-panel { background:#fff; border-radius:14px; padding:16px 18px; box-shadow:0 2px 10px rgba(124,58,237,.07); border:1px solid #f3f0ff; }
+  .insight-panel .ctitle { font-size:15px; font-weight:600; color:#4c1d95; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .insight-panel .ctitle::before { content:""; width:4px; height:16px; background:#7c3aed; border-radius:2px; }
+  .insight-item { padding:10px 12px; border-radius:8px; margin-bottom:8px; font-size:13px; line-height:1.6; }
+  .insight-item.good { background:#ecfdf5; border-left:3px solid #059669; }
+  .insight-item.warn { background:#fff7ed; border-left:3px solid #c2410c; }
+  .insight-item.info { background:#eff6ff; border-left:3px solid #2563eb; }
+  .insight-item .ii-title { font-weight:700; margin-bottom:2px; }
+  @media(max-width:1100px){ .two-col{grid-template-columns:1fr;} }
+  /* 单号查询模块 */
+  .lookup { margin:0 28px 20px; background:#fff; border-radius:14px; padding:16px 18px; box-shadow:0 2px 10px rgba(124,58,237,.07); border:1px solid #f3f0ff; }
+  .lookup .ctitle { font-size:15px; font-weight:600; color:#4c1d95; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .lookup .ctitle::before { content:""; width:4px; height:16px; background:#7c3aed; border-radius:2px; }
+  .lookup .search-row { display:flex; gap:10px; align-items:center; margin-bottom:14px; }
+  .lookup input[type=text] { padding:9px 14px; border:1px solid #ddd6fe; border-radius:8px; font-size:14px; width:320px; outline:none; }
+  .lookup input[type=text]:focus { border-color:#a78bfa; box-shadow:0 0 0 3px rgba(167,139,250,.15); }
+  .lookup .btn-search { padding:9px 22px; background:linear-gradient(135deg,#7c3aed,#6d28d9); color:#fff; border:none; border-radius:8px; font-size:14px; cursor:pointer; }
+  .lookup .btn-search:hover { background:linear-gradient(135deg,#6d28d9,#5b21b6); }
+  .lookup .hint { font-size:12px; color:#9ca3af; }
+  .lookup-result { margin-top:8px; }
+  .time-axis { display:flex; gap:0; align-items:flex-start; flex-wrap:wrap; padding:10px 0; }
+  .ta-node { flex:1; min-width:130px; text-align:center; position:relative; padding:0 6px; }
+  .ta-node .ta-dot { width:40px; height:40px; border-radius:50%; margin:0 auto 8px; display:flex; align-items:center; justify-content:center; font-size:16px; color:#fff; background:#c4b5fd; position:relative; z-index:2; }
+  .ta-node.done .ta-dot { background:#7c3aed; }
+  .ta-node.empty .ta-dot { background:#e5e7eb; color:#9ca3af; }
+  .ta-node .ta-line { position:absolute; top:20px; left:50%; width:100%; height:3px; background:#ddd6fe; z-index:1; }
+  .ta-node:last-child .ta-line { display:none; }
+  .ta-node.done .ta-line { background:#7c3aed; }
+  .ta-node .ta-label { font-size:13px; font-weight:600; color:#4c1d95; margin-bottom:4px; }
+  .ta-node .ta-time { font-size:12px; color:#6b7280; }
+  .ta-node .ta-time.actual { color:#059669; font-weight:600; }
+  .ta-node.empty .ta-time { color:#d1d5db; }
+  .info-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:14px; padding-top:14px; border-top:1px solid #f3f0ff; }
+  .info-grid .item { font-size:13px; }
+  .info-grid .item .lab { color:#9ca3af; margin-bottom:3px; }
+  .info-grid .item .val { color:#374151; font-weight:500; }
+  .box-list { margin-top:12px; }
+  .box-list .box-item { background:#faf8ff; border:1px solid #ede9fe; border-radius:10px; padding:12px 16px; margin-bottom:8px; cursor:pointer; transition:all .15s; }
+  .box-list .box-item:hover { background:#f5f3ff; border-color:#c4b5fd; }
+  .box-list .box-item.active { background:#ede9fe; border-color:#7c3aed; }
+  .box-list .box-item .bi-head { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  .box-list .box-item .bi-no { font-weight:600; color:#4c1d95; font-size:14px; }
+  .box-list .box-item .bi-meta { font-size:12px; color:#6b7280; }
+  /* 订单聚合行 */
+  .order-group { background:#fff; border:1px solid #ede9fe; border-radius:12px; margin-bottom:10px; overflow:hidden; }
+  .order-header { display:flex; align-items:center; gap:14px; padding:12px 16px; cursor:pointer; transition:all .15s; background:#faf8ff; }
+  .order-header:hover { background:#f5f3ff; }
+  .order-arrow { width:20px; height:20px; display:flex; align-items:center; justify-content:center; color:#7c3aed; font-size:12px; transition:transform .2s; flex-shrink:0; }
+  .order-group.expanded .order-arrow { transform:rotate(90deg); }
+  .order-sum { display:flex; gap:16px; align-items:center; flex-wrap:wrap; flex:1; }
+  .order-sum .o-field { font-size:13px; display:flex; flex-direction:column; gap:2px; }
+  .order-sum .o-field .lab { color:#9ca3af; font-size:11px; }
+  .order-sum .o-field .val { color:#374151; font-weight:500; }
+  .order-sum .o-field .val.primary { color:#4c1d95; font-weight:600; font-size:14px; }
+  .order-body { display:none; padding:0 16px 14px; border-top:1px solid #f3f0ff; }
+  .order-group.expanded .order-body { display:block; }
+  /* 弹窗 */
+  /* Provider Detail Modal (对齐旧版) */
+  .modal-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(40,30,70,.55); z-index:1000; justify-content:center; align-items:center; padding:20px; overflow:auto; }
+  .modal-overlay.show { display:flex; animation:fadeIn .2s; }
+  .modal { background:#fff; border-radius:16px; padding:24px; max-width:1200px; width:100%; max-height:88vh; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,.3); }
+  @media(max-width:1240px){ .modal{max-width:95vw;} }
+  .modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; padding-bottom:14px; border-bottom:2px solid #f0f0f5; }
+  .modal-header h2 { font-size:18px; color:#2c2c3e; font-weight:600; }
+  .modal-close { background:#f5f5fa; border:none; width:32px; height:32px; border-radius:50%; font-size:18px; cursor:pointer; color:#666; transition:background .2s; }
+  .modal-close:hover { background:#ede7ff; color:#667eea; }
+  .modal-body { overflow-y:auto; overflow-x:hidden; flex:1; display:flex; flex-direction:column; }
+  .modal-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:16px; }
+  .modal-summary .ms-item { background:#f8f7fc; padding:12px; border-radius:8px; text-align:center; }
+  .modal-summary .ms-item .v { font-size:17px; font-weight:700; color:#667eea; }
+  .modal-summary .ms-item .l { font-size:11px; color:#888; margin-top:2px; }
+  .modal-search { display:flex; gap:10px; margin:12px 0; padding:12px; background:#f8f9fa; border-radius:8px; border:1px solid #e9ecef; }
+  .modal-search input { flex:1; padding:8px 12px; border:1px solid #ddd; border-radius:6px; font-size:13px; }
+  .modal-search button { padding:8px 16px; background:#667eea; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; }
+  .modal-search button:hover { background:#5a67d8; }
+  .modal-table-wrap { overflow-x:auto; }
+  .modal-table-wrap table { width:100%; border-collapse:collapse; font-size:12px; }
+  .modal-table-wrap th { background:#f5f3ff; color:#4c1d95; padding:10px 8px; text-align:left; white-space:nowrap; font-weight:600; position:sticky; top:0; }
+  .modal-table-wrap td { padding:8px; border-bottom:1px solid #f0ecfa; white-space:nowrap; }
+  .modal-table-wrap tr:hover { background:#faf8ff; }
+  .modal-table-wrap .mono { font-family:monospace; color:#6a1b9a; }
+  .modal-table-wrap .tag-yes { color:#e65100; font-weight:600; }
+  .modal-table-wrap .tag-no { color:#888; }
+  /* 占比条样式（对齐旧版） */
+  .pct-bar { display:inline-flex; align-items:center; gap:6px; min-width:100px; }
+  .pct-bar .pct-fill { height:8px; border-radius:4px; min-width:2px; background:linear-gradient(90deg,#7c3aed,#a78bfa); transition:width .3s; }
+  .pct-bar span { font-size:11px; color:#666; white-space:nowrap; }
+  @media(max-width:1200px){ .kpi-row.g6,.kpi-row.g7{grid-template-columns:repeat(3,1fr);} .charts{grid-template-columns:1fr;} .kpi-row.g5{grid-template-columns:repeat(3,1fr);} }
+
+  /* ============ UI 打磨优化（仅样式，不涉及JS逻辑） ============ */
+  /* 1. 指标卡片：统一圆角、柔和阴影、视觉层次 */
+  .kpi-card { border-radius:12px; padding:16px 18px; box-shadow:0 1px 3px rgba(76,29,149,.06),0 4px 12px rgba(76,29,149,.05); border:1px solid #f0ecfa; border-left:4px solid #7c3aed; transition:box-shadow .2s; }
+  .kpi-card:hover { transform:none; box-shadow:0 2px 6px rgba(76,29,149,.08),0 6px 18px rgba(76,29,149,.08); }
+  .kpi-card .label { font-size:12px; color:#6b7280; margin-bottom:6px; letter-spacing:.2px; }
+  .kpi-card .value { font-size:22px; font-weight:700; color:#4c1d95; line-height:1.2; }
+  .kpi-card .unit { font-size:12px; color:#9ca3af; margin-left:3px; font-weight:400; }
+  .kpi-card .sub { font-size:11px; color:#9ca3af; margin-top:6px; }
+
+  /* 2. 间距留白统一：KPI行、区块标题、子面板内边距 */
+  #t3-kpiRow { padding:18px 28px 8px; gap:12px; }
+  #tab3 .subtabs { padding:14px 28px 0; }
+  #tab3 .subpanel.active { padding-bottom:8px; }
+  #tab3 .section-title { margin:18px 28px 12px; padding-left:12px; }
+  #tab3 .section-title:first-child { margin-top:14px; }
+
+  /* 3. 图表卡片：统一圆角阴影、padding */
+  #tab3 .chart-card { border-radius:12px; padding:14px 16px 12px; box-shadow:0 1px 3px rgba(76,29,149,.05),0 3px 10px rgba(76,29,149,.04); border:1px solid #f0ecfa; }
+  #tab3 .chart-card .ctitle { margin-bottom:4px; font-size:14px; }
+  #tab3 .chart-card .chart-box { margin-top:4px; }
+
+  /* 4. 图表说明副标题（新增样式） */
+  .c-desc { display:block; font-size:11px; font-weight:400; color:#9ca3af; margin:2px 0 6px; line-height:1.5; }
+  .c-desc::before { display:none; }
+
+  /* 5. 物流商卡片/运输卡片/洞察面板：统一阴影 */
+  #tab3 .transport-card { border-radius:12px; box-shadow:0 1px 3px rgba(76,29,149,.05),0 3px 10px rgba(76,29,149,.04); border:1px solid #f0ecfa; border-top:4px solid #7c3aed; }
+  #tab3 .provider-card { border-radius:12px; box-shadow:0 1px 3px rgba(76,29,149,.05),0 3px 10px rgba(76,29,149,.04); border:1px solid #f0ecfa; }
+  #tab3 .provider-card:hover { transform:translateY(-1px); box-shadow:0 2px 6px rgba(76,29,149,.08),0 6px 18px rgba(76,29,149,.07); }
+  #tab3 .insight-panel { border-radius:12px; box-shadow:0 1px 3px rgba(76,29,149,.05),0 3px 10px rgba(76,29,149,.04); border:1px solid #f0ecfa; }
+
+  /* 6. 明细/表格容器统一 */
+  #tab3 .detail { border-radius:12px; box-shadow:0 1px 3px rgba(76,29,149,.05),0 3px 10px rgba(76,29,149,.04); border:1px solid #f0ecfa; }
+  #tab3 .table-wrap.detail { padding:14px 16px; }
+
+  /* 7. 子选项卡：降低饱和度，更商务 */
+  #tab3 .subtab { transition:background .2s,color .2s; }
+  #tab3 .subtab.active { background:linear-gradient(135deg,#7c3aed,#6d28d9); box-shadow:0 2px 6px rgba(76,29,149,.18); }
+
+  /* 8. 趋势分析网格统一间距 */
+  #tab3 .charts-grid { gap:14px; padding:0 28px 16px; }
+
+  /* 9. 盒型分析网格统一 */
+  #tab3 .boxes-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(440px,1fr)); gap:14px; padding:0 28px 8px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-top">
+    <h1><span class="dot"></span>Stanley数据看板</h1>
+    <div class="sub">调拨管理 / 物流商异常时效 / 价格看板 三合一</div>
+  </div>
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('tab1')">调拨管理</div>
+    <div class="tab" onclick="switchTab('tab2')">物流商异常时效</div>
+    <div class="tab" onclick="switchTab('tab3')">价格看板</div>
+  </div>
+</div>
+
+<!-- ============ Tab1: 调拨管理 ============ -->
+<div class="tab-content active" id="tab1">
+  <div class="filter-bar" id="t1-filters">
+    <span class="label">筛选:</span>
+    <div class="mselect" id="t1-f-carrier"><div class="trigger">物流商</div><div class="panel"></div></div>
+    <div class="mselect" id="t1-f-transport"><div class="trigger">运输类型</div><div class="panel"></div></div>
+    <div class="mselect" id="t1-f-month"><div class="trigger">收件月份</div><div class="panel"></div></div>
+    <div class="mselect" id="t1-f-team"><div class="trigger">团队</div><div class="panel"></div></div>
+    <div class="mselect" id="t1-f-wh"><div class="trigger">发货仓库</div><div class="panel"></div></div>
+    <div class="mselect" id="t1-f-dest"><div class="trigger">目的仓库</div><div class="panel"></div></div>
+    <div class="mselect" id="t1-f-cat"><div class="trigger">一级分类</div><div class="panel"></div></div>
+    <button class="btn-reset" onclick="t1Reset()">重置</button>
+    <span class="filter-count" id="t1-filterCount"></span>
+  </div>
+  <div class="kpi-row g6" id="t1-kpiRow"></div>
+  <div class="charts">
+    <div class="chart-card"><div class="ctitle">运输类型占比</div><div class="chart-box" id="t1-c-transport"></div></div>
+    <div class="chart-card"><div class="ctitle">物流商调拨箱量</div><div class="chart-box" id="t1-c-carrier"></div></div>
+    <div class="chart-card"><div class="ctitle">按月调拨量趋势</div><div class="chart-box" id="t1-c-month"></div></div>
+    <div class="chart-card"><div class="ctitle">按周调拨量趋势</div><div class="chart-box" id="t1-c-week"></div></div>
+    <div class="chart-card"><div class="ctitle">异常类型分布</div><div class="chart-box" id="t1-c-exception"></div></div>
+    <div class="chart-card"><div class="ctitle">物流商异常率对比</div><div class="chart-box" id="t1-c-carrier-exc"></div></div>
+    <div class="chart-card"><div class="ctitle">发货仓库分布</div><div class="chart-box" id="t1-c-wh"></div></div>
+    <div class="chart-card"><div class="ctitle">目的仓库 Top10</div><div class="chart-box" id="t1-c-dest"></div></div>
+    <div class="chart-card"><div class="ctitle">各团队调拨箱量</div><div class="chart-box" id="t1-c-team"></div></div>
+    <div class="chart-card"><div class="ctitle">物流状态分布</div><div class="chart-box" id="t1-c-status"></div></div>
+  </div>
+  <div class="lookup">
+    <div class="ctitle">单号状态查询</div>
+    <div class="search-row">
+      <input type="text" id="t1-lookupInput" placeholder="输入 入库单号 / 箱号 / 调拨单号 查询状态..." onkeydown="if(event.key==='Enter')t1DoLookup()">
+      <button class="btn-search" onclick="t1DoLookup()">查询</button>
+      <span class="hint">支持入库单号、箱号、调拨单号</span>
+    </div>
+    <div class="lookup-result" id="t1-lookupResult"></div>
+  </div>
+  <div class="detail">
+    <div class="ctitle">SKU 明细钻取表</div>
+    <div class="toolbar">
+      <input type="text" id="t1-searchInput" placeholder="搜索 入库单号/SKU/产品名称/运单号(多个用空格或逗号分隔)..." oninput="t1OnSearch()">
+      <select id="t1-searchStatus" onchange="t1OnSearch()"><option value="">全部物流状态</option></select>
+      <select id="t1-searchAbnormal" onchange="t1OnSearch()"><option value="">全部(异常/正常)</option><option value="是">仅异常</option><option value="否">仅正常</option></select>
+      <button class="btn-export" onclick="t1ExportDetail()">导出Excel</button>
+      <span style="margin-left:auto;font-size:13px;color:#6b7280" id="t1-detailCount"></span>
+    </div>
+    <div style="overflow-x:auto;max-height:520px">
+      <table id="t1-detailTable"><thead></thead><tbody></tbody></table>
+    </div>
+    <div class="pager" id="t1-pager"></div>
+  </div>
+</div>
+
+<!-- ============ Tab2: 物流商异常时效 ============ -->
+<div class="tab-content" id="tab2">
+  <div class="filter-bar" id="t2-filters">
+    <span class="label">数据来源:</span>
+    <div class="src-tabs">
+      <div class="src-tab active" onclick="t2SwitchSource('total')">全部</div>
+      <div class="src-tab" onclick="t2SwitchSource('domestic')">国内</div>
+      <div class="src-tab" onclick="t2SwitchSource('bangladesh')">孟加拉(168)</div>
+    </div>
+    <span class="label" style="margin-left:12px">筛选:</span>
+    <div class="mselect" id="t2-f-whtype"><div class="trigger">仓库类型</div><div class="panel"></div></div>
+    <div class="mselect" id="t2-f-transport"><div class="trigger">运输类型</div><div class="panel"></div></div>
+    <div class="mselect" id="t2-f-team"><div class="trigger">团队</div><div class="panel"></div></div>
+    <div class="mselect" id="t2-f-dest"><div class="trigger">目的仓</div><div class="panel"></div></div>
+    <div class="mselect" id="t2-f-period"><div class="trigger">时效要求</div><div class="panel"></div></div>
+    <div class="mselect" id="t2-f-cat"><div class="trigger">一级分类</div><div class="panel"></div></div>
+    <span class="label">提货日期:</span>
+    <input type="date" class="date-input" id="t2-startDate" onchange="t2Filters.startDate=this.value;t2Render()">
+    <span style="color:#9ca3af">至</span>
+    <input type="date" class="date-input" id="t2-endDate" onchange="t2Filters.endDate=this.value;t2Render()">
+    <div class="date-quick">
+      <button onclick="t2QuickDate('7d')">近7天</button>
+      <button onclick="t2QuickDate('30d')">近30天</button>
+      <button onclick="t2QuickDate('thisMonth')">本月</button>
+      <button onclick="t2QuickDate('lastMonth')">上月</button>
+      <button onclick="t2ClearDate()">清空</button>
+    </div>
+    <button class="btn-reset" onclick="t2Reset()">重置</button>
+    <button class="btn-export" onclick="t2Export()">导出Excel</button>
+    <button class="btn-reset" onclick="t2ShowMethod()">口径说明</button>
+    <span class="filter-count" id="t2-filterCount"></span>
+  </div>
+  <div class="kpi-row g5" id="t2-kpiRow"></div>
+  <div class="charts">
+    <div class="chart-card"><div class="ctitle">时效要求分布</div><div class="chart-box" id="t2-c-period" onclick="t2OpenChartModal('t2-c-period','时效要求分布')" style="cursor:pointer"></div></div>
+    <div class="chart-card"><div class="ctitle">运输类型分布</div><div class="chart-box" id="t2-c-transport" onclick="t2OpenChartModal('t2-c-transport','运输类型分布')" style="cursor:pointer"></div></div>
+    <div class="chart-card"><div class="ctitle">物流商时效达标率排名</div><div class="chart-box" id="t2-c-compliance" onclick="t2OpenChartModal('t2-c-compliance','物流商时效达标率排名')" style="cursor:pointer"></div></div>
+    <div class="chart-card"><div class="ctitle">物流商异常率对比</div><div class="chart-box" id="t2-c-error" onclick="t2OpenChartModal('t2-c-error','物流商异常率对比')" style="cursor:pointer"></div></div>
+  </div>
+  <div class="detail">
+    <div class="ctitle">物流商详细排名</div>
+    <div class="toolbar">
+      <input type="text" id="t2-searchInput" placeholder="搜索物流商..." oninput="t2RenderTable()">
+      <span style="margin-left:auto;font-size:13px;color:#6b7280" id="t2-detailCount"></span>
+    </div>
+    <div style="overflow-x:auto;max-height:520px">
+      <table id="t2-detailTable"><thead></thead><tbody></tbody></table>
+    </div>
+    <div class="pager" id="t2-pager"></div>
+  </div>
+  <div class="detail">
+    <div class="ctitle">月份 × 运输类型 达标率交叉分析</div>
+    <div id="t2-monthlyCross" style="overflow-x:auto"></div>
+  </div>
+</div>
+
+<!-- Provider Detail Modal (对齐旧版) -->
+<div class="modal-overlay" id="t3-providerModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="t3-modalTitle">物流商详情</h2>
+      <button class="modal-close" onclick="t3CloseProviderModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-summary" id="t3-modalSummary"></div>
+      <div class="modal-search">
+        <input type="text" id="t3-modalSearchInput" placeholder="输入第三方入库单号进行搜索..." oninput="t3RenderModalTable()">
+        <button onclick="document.getElementById('t3-modalSearchInput').value='';t3RenderModalTable()">清除</button>
+      </div>
+      <div class="modal-table-wrap">
+        <table><thead id="t3-modalHead"></thead><tbody id="t3-modalBody"></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Tab3: 价格看板 ============ -->
+<div class="tab-content" id="tab3">
+  <div class="filter-bar" id="t3-filters">
+    <span class="label">筛选:</span>
+    <div class="mselect" id="t3-f-month"><div class="trigger">月份</div><div class="panel"></div></div>
+    <div class="mselect" id="t3-f-transport"><div class="trigger">运输类型</div><div class="panel"></div></div>
+    <div class="mselect" id="t3-f-cat"><div class="trigger">一级分类</div><div class="panel"></div></div>
+    <div class="mselect" id="t3-f-period"><div class="trigger">时效要求</div><div class="panel"></div></div>
+    <div class="mselect" id="t3-f-team"><div class="trigger">发货团队</div><div class="panel"></div></div>
+    <div class="mselect" id="t3-f-desttype"><div class="trigger">目的地分类</div><div class="panel"></div></div>
+    <div class="mselect" id="t3-f-origin"><div class="trigger">发货地</div><div class="panel"></div></div>
+    <div class="mselect" id="t3-f-carrier"><div class="trigger">物流商</div><div class="panel"></div></div>
+    <span style="font-size:12px;color:#6b7280">提货日期:</span>
+    <input type="date" class="date-input" id="t3-dateStart" onchange="t3Filters.dateStart=this.value;t3Render()">
+    <span style="color:#9ca3af">至</span>
+    <input type="date" class="date-input" id="t3-dateEnd" onchange="t3Filters.dateEnd=this.value;t3Render()">
+    <button class="btn-reset" onclick="t3Reset()">重置</button>
+    <button class="btn-export" onclick="t3Export()">导出Excel</button>
+    <span class="filter-count" id="t3-filterCount"></span>
+  </div>
+  <div class="kpi-row g10" id="t3-kpiRow"></div>
+  <div class="subtabs">
+    <button class="subtab active" onclick="t3SwitchSub('t3-sub-providers',event)">物流商分析</button>
+    <button class="subtab" onclick="t3SwitchSub('t3-sub-channels',event)">渠道对比</button>
+    <button class="subtab" onclick="t3SwitchSub('t3-sub-trend',event)">趋势分析</button>
+    <button class="subtab" onclick="t3SwitchSub('t3-sub-efficiency',event)">时效与价格</button>
+    <button class="subtab" onclick="t3SwitchSub('t3-sub-boxes',event)">盒型分析</button>
+  </div>
+  <!-- 物流商分析 -->
+  <div class="subpanel active" id="t3-sub-providers">
+    <h2 class="section-title">运输类型总览</h2>
+    <div class="transport-grid" id="t3-transportGrid"></div>
+    <div class="charts" style="margin-top:24px">
+      <div class="chart-card"><div class="ctitle">运输类型费用汇总</div><div class="c-desc">按空运/快递/海运分组对比总运费支出，识别主要成本渠道</div><div class="chart-box" id="t3-c-transport"></div></div>
+    </div>
+    <h2 class="section-title">物流商 × 运输类型 <span class="hint">点击卡片展开查看细分一级分类 → 点击行查看发货详情</span></h2>
+    <div id="t3-providerGrid" class="provider-grid" style="margin:0 28px 24px"></div>
+  </div>
+  <!-- 渠道对比 -->
+  <div class="subpanel" id="t3-sub-channels">
+    <h2 class="section-title">物流渠道对比表 <span class="hint">点击表头排序</span></h2>
+    <div class="table-wrap detail" style="margin-top:0">
+      <div style="overflow-x:auto">
+        <table class="data-table" id="t3-channelTable"><thead></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <div class="charts" style="margin-top:24px">
+      <div class="chart-card"><div class="ctitle">物流渠道费用对比 Top10</div><div class="c-desc">按物流渠道统计总运费排名，定位高支出渠道</div><div class="chart-box" id="t3-c-channel"></div></div>
+      <div class="chart-card"><div class="ctitle">渠道均价对比 Top10</div><div class="c-desc">按件计算均价，衡量各渠道单位运输成本</div><div class="chart-box" id="t3-c-channelavg"></div></div>
+    </div>
+  </div>
+  <!-- 趋势分析 -->
+  <div class="subpanel" id="t3-sub-trend">
+    <h2 class="section-title">周度趋势分析</h2>
+    <div class="charts-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:18px;padding:0 28px 20px">
+      <div class="chart-card"><div class="ctitle">各运输类型周度均价趋势</div><div class="c-desc">按周展示空运/快递/海运的kg均价变化，监控运价波动</div><div class="chart-box" id="t3-c-weekavg"></div></div>
+      <div class="chart-card"><div class="ctitle">各运输类型周度发货量(件数)</div><div class="c-desc">按周统计各运输类型发货件数，反映发货节奏</div><div class="chart-box" id="t3-c-weekqty"></div></div>
+      <div class="chart-card"><div class="ctitle">周度总费用趋势</div><div class="c-desc">按周汇总总运费(运费+保险+报关)，监控支出趋势</div><div class="chart-box" id="t3-c-week"></div></div>
+      <div class="chart-card"><div class="ctitle">周度总体积重趋势</div><div class="c-desc">按周统计计费重总和，反映货量变化</div><div class="chart-box" id="t3-c-weekweight"></div></div>
+    </div>
+  </div>
+  <!-- 时效与价格 -->
+  <div class="subpanel" id="t3-sub-efficiency">
+    <h2 class="section-title">时效 × 价格 × 发货量 决策矩阵 <span class="hint">气泡大小=发货件数, 越靠左下越优(低价快时效)</span></h2>
+    <div class="two-col" style="padding:0 28px 20px">
+      <div class="chart-card"><div class="ctitle">各物流商时效-价格分布</div><div class="c-desc">横轴=平均时效天数，纵轴=件均价，气泡=发货件数，辅助筛选高性价比物流商</div><div class="chart-box" id="t3-c-scatter" style="height:420px"></div></div>
+      <div class="insight-panel">
+        <div class="ctitle">渠道决策洞察</div>
+        <div class="c-desc">基于时效与价格自动生成的渠道推荐结论</div>
+        <div id="t3-insightList"></div>
+      </div>
+    </div>
+    <div class="charts">
+      <div class="chart-card"><div class="ctitle">物流商总费用对比 Top12</div><div class="c-desc">按物流商统计总运费排名，识别核心供应商</div><div class="chart-box" id="t3-c-carrier"></div></div>
+      <div class="chart-card"><div class="ctitle">物流商均价对比 Top12</div><div class="c-desc">按件均价排名，衡量各物流商单位成本竞争力</div><div class="chart-box" id="t3-c-carrieravg"></div></div>
+    </div>
+  </div>
+  <!-- 盒型分析 -->
+  <div class="subpanel" id="t3-sub-boxes">
+    <h2 class="section-title">盒型发货量占比分析 <span class="hint">按筛选条件统计各盒型发货占比</span></h2>
+    <div class="boxes-grid" style="padding:0 28px">
+      <div class="chart-card"><div class="ctitle">各盒型箱数占比</div><div class="c-desc">按盒型统计发货箱数占比，了解包装结构</div><div class="chart-box" id="t3-c-boxcost"></div></div>
+      <div class="chart-card"><div class="ctitle">各盒型发货量排行</div><div class="c-desc">按盒型统计发货件数排名，定位主力规格</div><div class="chart-box" id="t3-c-boxtype"></div></div>
+    </div>
+    <div class="boxes-table-section detail" style="margin-top:24px">
+      <div class="ctitle">详细数据表</div>
+      <div style="overflow-x:auto">
+        <table class="data-table" id="t3-boxTable"><thead></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <div class="subtabs" style="padding:12px 0 0;margin:0 28px">
+      <button class="subtab active" id="t3-boxBasicBtn" onclick="t3SwitchBoxView('basic')">盒型统计</button>
+      <button class="subtab" id="t3-boxDeepBtn" onclick="t3SwitchBoxView('deep')">盒型×渠道交叉</button>
+      <button class="subtab" id="t3-boxCostBtn" onclick="t3SwitchBoxView('cost')">盒型费用分析</button>
+    </div>
+    <div id="t3-boxBasicView">
+    </div>
+    <div id="t3-boxDeepView" style="display:none;margin-top:20px">
+      <div class="detail">
+        <div class="ctitle">盒型 × 渠道交叉分析</div>
+        <div id="t3-boxCross"></div>
+      </div>
+    </div>
+    <div id="t3-boxCostView" style="display:none;margin-top:20px">
+      <div class="detail">
+        <div class="ctitle">盒型费用分析 <span class="hint" style="font-size:12px;font-weight:400">按盒型×运输类型计算单件费用（含燃油/关税/保税仓费）</span></div>
+        <div id="t3-boxCostTable" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </div>
+  <!-- 详细记录列表（始终显示） -->
+  <div class="detail">
+    <div class="ctitle">详细记录列表</div>
+    <div class="toolbar">
+      <input type="text" id="t3-searchInput" placeholder="搜索 入库单号/一级分类/物流商/渠道..." oninput="t3OnSearch()">
+      <span style="margin-left:auto;font-size:13px;color:#6b7280" id="t3-detailCount"></span>
+    </div>
+    <div style="overflow-x:auto;max-height:520px">
+      <table id="t3-detailTable"><thead></thead><tbody></tbody></table>
+    </div>
+    <div class="pager" id="t3-pager"></div>
+  </div>
+</div>
+
+<!-- 弹窗 -->
+<div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modalTitle">详情</h2>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<script src="all_data.js?v=20260817c"></script>
+<script src="app.js?v=20260817c"></script>
+
+</body>
+</html>
