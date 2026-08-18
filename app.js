@@ -21,7 +21,7 @@ frData = frData.filter(function(d){return d['入库单号']&&String(d['入库单
 
 // ===== Tab2达标率计算：自算时效天数 vs PERIOD_LIMITS =====
 var PERIOD_LIMITS={'4天':7,'7天':9,'8天':8,'10天':12,'11天':13,'15天':15,'18天':18,'30天':32,'38天':38,'4':7,'7':9,'8':8,'10':12,'11':13,'15':15,'18':18,'30':32,'38':38};
-function calcTransitDays(d){var t1=parseDate(d['提货时间']),t2=parseDate(d['上架时间']);if(!t1)return null;if(!t2){var st=String(d['物流状态']||'').trim();if(st==='运输中'||st==='待上架'||st==='已到仓（亚马逊/FBT）')t2=new Date();else return null;}var days=Math.floor((t2.getTime()-t1.getTime())/86400000);return isNaN(days)?null:days;}
+function calcTransitDays(d){var t1=parseDate(d['提货时间']);if(!t1)return null;var whType=String(d['仓库类型']||'').trim();var t2;if(whType==='万邑通'){t2=parseDate(d['上架时间']);}else{t2=parseDate(d['签收时间']);}if(!t2){var st=String(d['物流状态']||'').trim();if(st==='运输中'||st==='待上架'||st==='已到仓（亚马逊/FBT）')t2=new Date();else return null;}var days=Math.floor((t2.getTime()-t1.getTime())/86400000);return isNaN(days)?null:days;}
 function isCompliant(d){var p=String(d['时效要求']||'').trim();var days=calcTransitDays(d);if(!p||p==='nan'||p==='NaT'||days===null||isNaN(days))return null;var limit=PERIOD_LIMITS[p];if(limit===undefined)limit=PERIOD_LIMITS[p.replace('天','')];if(limit===undefined)limit=PERIOD_LIMITS[p.replace('.0','')];if(limit===undefined)limit=PERIOD_LIMITS[p.replace('.0','')+'天'];if(limit===undefined)return null;return days<=limit;}
 function isValidStat(d){var p=String(d['时效要求']||'').trim();var days=calcTransitDays(d);return !!p&&p!=='nan'&&p!=='NaT'&&days!==null&&!isNaN(days)&&days>=0;}
 function isExc(d){return isCompliant(d)===false;}
@@ -1374,10 +1374,1009 @@ function t3Export(){
 }
 
 // ============================================================
-// 初始化
+// Tab4: 供应商评级
 // ============================================================
+var T4_WEIGHTS = { '时效':0.35, '成本':0.25, '服务':0.15, '稳定性':0.10, '异常':0.10 };
+var T4_DIM_FULL = 100;
+var t4Filters = { timeMode:'month', selectedMonths:[], selectedQuarters:[], transport:[], startDate:'', endDate:'' };
+var t4Mselects = {};
+var t4SortState = { key:'totalScore', desc:true };
+
+// 服务打分存储（localStorage）
+function t4GetServiceScores(){
+  try { return JSON.parse(localStorage.getItem('t4_service_scores')||'{}'); }
+  catch(e){ return {}; }
+}
+function t4SaveServiceScores(s){
+  try { localStorage.setItem('t4_service_scores', JSON.stringify(s)); } catch(e){}
+}
+function t4GetServiceScore(carrier, month){
+  var s = t4GetServiceScores();
+  var key = carrier+'|'+month;
+  return s[key] || 0;
+}
+function t4SetServiceScore(carrier, month, stars){
+  var s = t4GetServiceScores();
+  var key = carrier+'|'+month;
+  if(stars > 0) s[key] = stars;
+  else delete s[key];
+  t4SaveServiceScores(s);
+}
+
+// 初始化筛选器
+function t4InitFilters(){
+  // 月份多选
+  var allMonths = uniqueVals(t2BoxData, '收件年份').map(function(y){
+    return uniqueVals(t2BoxData, '收件月份').map(function(m){
+      return y+'-'+String(m).padStart(2,'0');
+    });
+  }).flat().filter(function(m){ return m && m !== '-' && !m.startsWith('nan'); }).sort();
+  // 也可以从提货时间提取
+  if(allMonths.length === 0){
+    var mSet = {};
+    t2BoxData.forEach(function(d){
+      var dt = parseDate(d['提货时间']);
+      if(dt){ var k = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0'); mSet[k]=1; }
+    });
+    allMonths = Object.keys(mSet).sort();
+  }
+  t4Mselects['months'] = initMselect('t4-monthPicker','月份',allMonths,t4Filters,function(){ t4Filters.selectedMonths = t4Filters['月份']; t4Render(); });
+  t4Filters.selectedMonths = [];
+
+  // 季度多选
+  var quarters = [];
+  var ySet = {};
+  allMonths.forEach(function(m){
+    var parts = m.split('-');
+    var y = parts[0], mo = parseInt(parts[1]);
+    var q = 'Q'+Math.ceil(mo/3);
+    var qk = y+'-'+q;
+    ySet[qk] = 1;
+  });
+  quarters = Object.keys(ySet).sort();
+  t4Mselects['quarters'] = initMselect('t4-quarterPicker','季度',quarters,t4Filters,function(){ t4Filters.selectedQuarters = t4Filters['季度']; t4Render(); });
+  t4Filters.selectedQuarters = [];
+
+  // 运输类型
+  var transports = uniqueVals(t2BoxData, '运输类型').filter(function(t){ return t && t !== 'nan'; });
+  t4Mselects['transport'] = initMselect('t4-f-transport','运输类型',transports,t4Filters,function(){ t4Filters.transport = t4Filters['运输类型']; t4Render(); });
+  t4Filters.transport = [];
+
+  // 发货仓库
+  var origins = uniqueVals(t2BoxData, '发货仓库').filter(function(v){ return v && v !== 'nan'; });
+  t4Mselects['origin'] = initMselect('t4-f-origin','发货仓库',origins,t4Filters,function(){ t4Filters.origin = t4Filters['发货仓库']; t4Render(); });
+  t4Filters.origin = [];
+
+  // 目的仓库
+  var dests = uniqueVals(t2BoxData, '目的仓库').filter(function(v){ return v && v !== 'nan'; });
+  t4Mselects['dest'] = initMselect('t4-f-dest','目的仓库',dests,t4Filters,function(){ t4Filters.dest = t4Filters['目的仓库']; t4Render(); });
+  t4Filters.dest = [];
+}
+
+function t4SwitchTimeMode(mode, evt){
+  t4Filters.timeMode = mode;
+  document.querySelectorAll('#t4-timeMode .src-tab').forEach(function(t){ t.classList.remove('active'); });
+  var btn = (evt && evt.target) ? evt.target : document.querySelector('#t4-timeMode .src-tab[onclick*="'+mode+'"]');
+  if(btn) btn.classList.add('active');
+  document.getElementById('t4-monthPicker').style.display = (mode==='month') ? '' : 'none';
+  document.getElementById('t4-quarterPicker').style.display = (mode==='quarter') ? '' : 'none';
+  document.getElementById('t4-customPicker').style.display = (mode==='custom') ? 'flex' : 'none';
+  t4Render();
+}
+
+function t4Reset(){
+  for(var k in t4Mselects){ t4Mselects[k].reset(); }
+  t4Filters.selectedMonths = [];
+  t4Filters.selectedQuarters = [];
+  t4Filters.transport = [];
+  t4Filters.origin = [];
+  t4Filters.dest = [];
+  t4Filters.startDate = '';
+  t4Filters.endDate = '';
+  document.getElementById('t4-startDate').value = '';
+  document.getElementById('t4-endDate').value = '';
+  t4Render();
+}
+
+// 获取时间筛选范围内的数据
+function t4GetFilteredBoxData(){
+  return t2BoxData.filter(function(d){
+    if(t4Filters.transport.length && t4Filters.transport.indexOf(String(d['运输类型'])) === -1) return false;
+    if(t4Filters.origin.length && t4Filters.origin.indexOf(String(d['发货仓库'])) === -1) return false;
+    if(t4Filters.dest.length && t4Filters.dest.indexOf(String(d['目的仓库'])) === -1) return false;
+    var dt = parseDate(d['提货时间']);
+    if(!dt) return false;
+    if(t4Filters.timeMode === 'month'){
+      if(t4Filters.selectedMonths.length === 0) return true;
+      var mKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+      return t4Filters.selectedMonths.indexOf(mKey) > -1;
+    }
+    if(t4Filters.timeMode === 'quarter'){
+      if(t4Filters.selectedQuarters.length === 0) return true;
+      var qKey = dt.getFullYear()+'-Q'+Math.ceil((dt.getMonth()+1)/3);
+      return t4Filters.selectedQuarters.indexOf(qKey) > -1;
+    }
+    if(t4Filters.timeMode === 'custom'){
+      if(t4Filters.startDate){ var s = new Date(t4Filters.startDate+'T00:00:00'); if(dt < s) return false; }
+      if(t4Filters.endDate){ var e = new Date(t4Filters.endDate+'T23:59:59'); if(dt > e) return false; }
+      return true;
+    }
+    return true;
+  });
+}
+
+function t4GetFilteredFreightData(){
+  return frData.filter(function(d){
+    if(t4Filters.transport.length && t4Filters.transport.indexOf(String(d['运输类型'])) === -1) return false;
+    if(t4Filters.origin.length && t4Filters.origin.indexOf(String(d['发货地'])) === -1) return false;
+    if(t4Filters.dest.length && t4Filters.dest.indexOf(String(d['目的地'])) === -1) return false;
+    var dt = parseDate(d['提货日期']);
+    if(!dt) return false;
+    if(t4Filters.timeMode === 'month'){
+      if(t4Filters.selectedMonths.length === 0) return true;
+      var mKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+      return t4Filters.selectedMonths.indexOf(mKey) > -1;
+    }
+    if(t4Filters.timeMode === 'quarter'){
+      if(t4Filters.selectedQuarters.length === 0) return true;
+      var qKey = dt.getFullYear()+'-Q'+Math.ceil((dt.getMonth()+1)/3);
+      return t4Filters.selectedQuarters.indexOf(qKey) > -1;
+    }
+    if(t4Filters.timeMode === 'custom'){
+      if(t4Filters.startDate){ var s = new Date(t4Filters.startDate+'T00:00:00'); if(dt < s) return false; }
+      if(t4Filters.endDate){ var e = new Date(t4Filters.endDate+'T23:59:59'); if(dt > e) return false; }
+      return true;
+    }
+    return true;
+  });
+}
+
+// 获取数据涉及的所有月份
+function t4GetMonthsInData(){
+  var mSet = {};
+  t4GetFilteredBoxData().forEach(function(d){
+    var dt = parseDate(d['提货时间']);
+    if(dt){ var k = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0'); mSet[k]=1; }
+  });
+  return Object.keys(mSet).sort();
+}
+
+// 计算各物流商各维度得分
+function t4CalcRatings(){
+  var boxData = t4GetFilteredBoxData();
+  var frDataFiltered = t4GetFilteredFreightData();
+  var months = t4GetMonthsInData();
+  var carriers = uniqueVals(boxData, '物流商').filter(function(c){ return c && c !== 'nan' && c !== '未指定'; });
+
+  var results = {};
+
+  carriers.forEach(function(carrier){
+    var cBox = boxData.filter(function(d){ return d['物流商'] === carrier; });
+    var cFr = frDataFiltered.filter(function(d){ return d['物流商'] === carrier; });
+    if(cBox.length === 0 && cFr.length === 0) return;
+
+    // === 1. 时效维度 (35%) ===
+    var validData = cBox.filter(isValidStat);
+    var validQty = validData.reduce(function(s,d){ return s + qtyOf(d); }, 0);
+    var excQty = validData.filter(isExc).reduce(function(s,d){ return s + qtyOf(d); }, 0);
+    var compRate = validQty > 0 ? (validQty - excQty) / validQty * 100 : 0;
+    var timeScore = Math.min(compRate / 95 * 100, 100); // 95%达标率=满分100，上限100
+    if(validQty === 0) timeScore = 0;
+
+    // === 2. 成本维度 (25%) ===
+    // 同运输类型内对比单kg均价，最低=100
+    var costScore = 0;
+    var totalCw = 0, totalAmt = 0;
+    cFr.forEach(function(d){
+      var cw = parseFloat(d['计费重']) || 0;
+      var amt = parseFloat(d['总金额']) || 0;
+      if(cw > 0 && amt > 0){ totalCw += cw; totalAmt += amt; }
+    });
+    var avgPrice = totalCw > 0 ? totalAmt / totalCw : 0;
+    if(avgPrice > 0){
+      // 计算同运输类型内所有物流商的最低均价
+      var transportTypes = {};
+      cFr.forEach(function(d){ var t = d['运输类型'] || '未知'; if(!transportTypes[t]) transportTypes[t] = {totalCw:0, totalAmt:0}; var cw = parseFloat(d['计费重'])||0; var amt = parseFloat(d['总金额'])||0; if(cw>0&&amt>0){ transportTypes[t].totalCw+=cw; transportTypes[t].totalAmt+=amt; } });
+      var typeScores = [];
+      var typeWeights = [];
+      Object.keys(transportTypes).forEach(function(t){
+        var tt = transportTypes[t];
+        if(tt.totalCw === 0) return;
+        var typeAvg = tt.totalAmt / tt.totalCw;
+        // 算同类型所有物流商最低价
+        var minAvg = Infinity;
+        frDataFiltered.forEach(function(d){
+          if((d['运输类型']||'未知') !== t) return;
+          if(d['物流商'] === carrier) return;
+          var cw2 = parseFloat(d['计费重'])||0;
+          var amt2 = parseFloat(d['总金额'])||0;
+          if(cw2 > 0 && amt2 > 0){
+            var a = amt2 / cw2;
+            if(a < minAvg) minAvg = a;
+          }
+        });
+        // 也包含自己
+        if(typeAvg < minAvg) minAvg = typeAvg;
+        if(minAvg === Infinity) minAvg = typeAvg;
+        var tScore = Math.min(minAvg / typeAvg * 100, 100);
+        typeScores.push(tScore);
+        typeWeights.push(tt.totalCw); // 按计费重加权
+      });
+      if(typeScores.length > 0){
+        var wSum = typeWeights.reduce(function(a,b){ return a+b; }, 0);
+        costScore = typeScores.reduce(function(s,v,i){ return s + v * typeWeights[i]; }, 0) / wSum;
+      }
+    }
+
+    // === 3. 服务维度 (15%) ===
+    // 按月打分取平均
+    var serviceScores = [];
+    months.forEach(function(m){
+      var stars = t4GetServiceScore(carrier, m);
+      if(stars > 0) serviceScores.push(stars * 20); // 5星=100分
+    });
+    var serviceScore = serviceScores.length > 0 ? serviceScores.reduce(function(a,b){ return a+b; }, 0) / serviceScores.length : 0;
+
+    // === 4. 稳定性维度 (10%) ===
+    // 各月达标率标准差 → 得分 = 100 - (σ × 系数)
+    var monthlyCompRates = [];
+    months.forEach(function(m){
+      var mData = cBox.filter(function(d){
+        var dt = parseDate(d['提货时间']);
+        if(!dt) return false;
+        var mKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+        return mKey === m;
+      });
+      var mValid = mData.filter(isValidStat);
+      var mValidQty = mValid.reduce(function(s,d){ return s + qtyOf(d); }, 0);
+      var mExcQty = mValid.filter(isExc).reduce(function(s,d){ return s + qtyOf(d); }, 0);
+      if(mValidQty > 0) monthlyCompRates.push((mValidQty - mExcQty) / mValidQty * 100);
+    });
+    var stabilityScore = 100;
+    if(monthlyCompRates.length >= 2){
+      var mean = monthlyCompRates.reduce(function(a,b){ return a+b; }, 0) / monthlyCompRates.length;
+      var variance = monthlyCompRates.reduce(function(s,v){ return s + Math.pow(v - mean, 2); }, 0) / monthlyCompRates.length;
+      var stdDev = Math.sqrt(variance);
+      stabilityScore = Math.max(100 - stdDev * 2, 0); // 标准差×2，越小越高
+    }
+
+    // === 5. 异常维度 (10%) ===
+    // 超时异常率70% + 查验率30%
+    var excRate = validQty > 0 ? excQty / validQty * 100 : 0;
+    var totalQty = cBox.reduce(function(s,d){ return s + qtyOf(d); }, 0);
+    var chkQty = cBox.filter(isChk).reduce(function(s,d){ return s + qtyOf(d); }, 0);
+    var chkRate = totalQty > 0 ? chkQty / totalQty * 100 : 0;
+    var anomalyRate = excRate * 0.7 + chkRate * 0.3;
+    var anomalyScore = Math.max((1 - anomalyRate / 100) * 100, 0);
+
+    // === 综合评分 ===
+    var totalScore = timeScore * T4_WEIGHTS['时效'] + costScore * T4_WEIGHTS['成本'] + serviceScore * T4_WEIGHTS['服务'] + stabilityScore * T4_WEIGHTS['稳定性'] + anomalyScore * T4_WEIGHTS['异常'];
+
+    // 评级
+    var grade = 'D';
+    if(totalScore >= 85) grade = 'A';
+    else if(totalScore >= 70) grade = 'B';
+    else if(totalScore >= 60) grade = 'C';
+
+    results[carrier] = {
+      carrier: carrier,
+      timeScore: Math.round(timeScore * 10) / 10,
+      costScore: Math.round(costScore * 10) / 10,
+      serviceScore: Math.round(serviceScore * 10) / 10,
+      stabilityScore: Math.round(stabilityScore * 10) / 10,
+      anomalyScore: Math.round(anomalyScore * 10) / 10,
+      totalScore: Math.round(totalScore * 10) / 10,
+      grade: grade,
+      compRate: Math.round(compRate * 100) / 100,
+      excRate: Math.round(excRate * 100) / 100,
+      chkRate: Math.round(chkRate * 100) / 100,
+      avgPrice: Math.round(avgPrice * 100) / 100,
+      totalQty: Math.round(totalQty),
+      boxCount: cBox.length,
+      validQty: Math.round(validQty),
+      monthlyCompRates: monthlyCompRates,
+      months: months
+    };
+  });
+
+  return results;
+}
+
+function t4Render(){
+  var results = t4CalcRatings();
+  t4RenderTable(results);
+  t4RenderCharts(results);
+  t4RenderServiceArea();
+  var count = Object.keys(results).length;
+  document.getElementById('t4-filterCount').textContent = '当前评级: ' + count + ' 家物流商';
+}
+
+function t4RenderTable(results){
+  var rows = Object.values(results);
+  // 排序
+  var sk = t4SortState.key;
+  rows.sort(function(a,b){ return t4SortState.desc ? (b[sk] - a[sk]) : (a[sk] - b[sk]); });
+
+  // 搜索
+  var q = (document.getElementById('t4-searchInput').value || '').toLowerCase().trim();
+  if(q) rows = rows.filter(function(r){ return r.carrier.toLowerCase().indexOf(q) > -1; });
+
+  var cols = [
+    {k:'rank', l:'排名'},
+    {k:'carrier', l:'物流商'},
+    {k:'grade', l:'评级'},
+    {k:'totalScore', l:'综合评分'},
+    {k:'timeScore', l:'时效(35%)'},
+    {k:'costScore', l:'成本(25%)'},
+    {k:'serviceScore', l:'服务(15%)'},
+    {k:'stabilityScore', l:'稳定性(10%)'},
+    {k:'anomalyScore', l:'异常(10%)'},
+    {k:'compRate', l:'达标率'},
+    {k:'excRate', l:'超时率'},
+    {k:'chkRate', l:'查验率'},
+    {k:'avgPrice', l:'单kg均价'},
+    {k:'totalQty', l:'总件数'},
+    {k:'boxCount', l:'箱数'}
+  ];
+
+  var sortArrow = function(k){ return t4SortState.key === k ? (t4SortState.desc ? ' ↓' : ' ↑') : ''; };
+
+  document.querySelector('#t4-ratingTable thead').innerHTML = '<tr>' + cols.map(function(c){
+    return '<th onclick="t4SortBy(\''+c.k+'\')" style="cursor:pointer;white-space:nowrap">' + c.l + '<span class="arrow">'+sortArrow(c.k)+'</span></th>';
+  }).join('') + '</tr>';
+
+  document.querySelector('#t4-ratingTable tbody').innerHTML = rows.map(function(r, i){
+    var rank = i + 1;
+    var gradeClass = 'rating-' + r.grade;
+    var compColor = r.compRate >= 80 ? 'tag-green' : (r.compRate >= 60 ? 'tag-orange' : 'tag-red');
+    var excColor = r.excRate > 20 ? 'tag-red' : (r.excRate > 10 ? 'tag-orange' : 'tag-green');
+    return '<tr style="cursor:pointer" onclick="t4ShowDetail(\''+escapeAttr(r.carrier)+'\')">'+
+      '<td>'+rank+'</td>'+
+      '<td style="font-weight:600;color:#4c1d95">'+escapeHtml(r.carrier)+'</td>'+
+      '<td><span class="rating-badge '+gradeClass+'">'+r.grade+'</span></td>'+
+      '<td><span class="score-cell" style="color:'+ (r.totalScore>=85?'#059669':r.totalScore>=70?'#7c3aed':r.totalScore>=60?'#d97706':'#dc2626') +'">'+r.totalScore+'</span></td>'+
+      '<td><span class="dim-score">'+r.timeScore+'</span></td>'+
+      '<td><span class="dim-score">'+r.costScore+'</span></td>'+
+      '<td><span class="dim-score">'+(r.serviceScore>0?r.serviceScore:'<span style="color:#ccc">未评</span>')+'</span></td>'+
+      '<td><span class="dim-score">'+r.stabilityScore+'</span></td>'+
+      '<td><span class="dim-score">'+r.anomalyScore+'</span></td>'+
+      '<td><span class="tag '+compColor+'">'+r.compRate+'%</span></td>'+
+      '<td><span class="tag '+excColor+'">'+r.excRate+'%</span></td>'+
+      '<td>'+(r.chkRate>0?'<span class="tag '+(r.chkRate>10?'tag-red':'tag-orange')+'">'+r.chkRate+'%</span>':'-')+'</td>'+
+      '<td>'+(r.avgPrice>0?'¥'+r.avgPrice:'-')+'</td>'+
+      '<td>'+r.totalQty.toLocaleString()+'</td>'+
+      '<td>'+r.boxCount+'</td>'+
+      '</tr>';
+  }).join('') || '<tr><td colspan="15" class="empty">无数据</td></tr>';
+
+  document.getElementById('t4-detailCount').textContent = '共 ' + rows.length + ' 家物流商';
+}
+
+function t4SortBy(key){
+  if(t4SortState.key === key) t4SortState.desc = !t4SortState.desc;
+  else { t4SortState.key = key; t4SortState.desc = true; }
+  t4RenderTable(t4CalcRatings());
+}
+function t4SearchTable(){ t4RenderTable(t4CalcRatings()); }
+
+function t4RenderCharts(results){
+  var rows = Object.values(results).sort(function(a,b){ return b.totalScore - a.totalScore; });
+  var top10 = rows.slice(0, 10);
+
+  // 1. 雷达图
+  var radarIndicators = [
+    {name:'时效', max:100}, {name:'成本', max:100}, {name:'服务', max:100}, {name:'稳定性', max:100}, {name:'异常', max:100}
+  ];
+  var radarSeries = top10.slice(0, 6).map(function(r, i){
+    return {
+      name: r.carrier,
+      type: 'radar',
+      data: [{
+        value: [r.timeScore, r.costScore, r.serviceScore || 0, r.stabilityScore, r.anomalyScore],
+        name: r.carrier,
+        areaStyle: { opacity: 0.1 }
+      }],
+      lineStyle: { color: PALETTE[i] },
+      itemStyle: { color: PALETTE[i] },
+      areaStyle: { color: PALETTE[i], opacity: 0.1 }
+    };
+  });
+  t3SetOption('t4-c-radar', {
+    tooltip: { trigger: 'item' },
+    legend: { bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
+    radar: { indicator: radarIndicators, center: ['50%','48%'], radius: '60%', splitArea: { areaStyle: { color: ['#faf8ff','#f5f3ff'] } }, axisName: { color: '#4c1d95', fontSize: 12 } },
+    series: radarSeries
+  });
+
+  // 2. 综合评分排名柱状图
+  t3SetOption('t4-c-ranking', {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: function(p){ return p[0].name + '<br/>综合评分: ' + p[0].value + '<br/>评级: ' + top10[p[0].dataIndex].grade; } },
+    grid: { left: 10, right: 20, top: 20, bottom: 60, containLabel: true },
+    xAxis: { type: 'category', data: top10.map(function(r){ return r.carrier; }), axisLabel: { rotate: 35, color: '#6b7280', fontSize: 11 } },
+    yAxis: { type: 'value', name: '评分', max: 100, axisLabel: { color: '#9ca3af' } },
+    series: [{
+      type: 'bar',
+      data: top10.map(function(r){ return { value: r.totalScore, itemStyle: { color: r.totalScore>=85?'#059669':r.totalScore>=70?'#7c3aed':r.totalScore>=60?'#d97706':'#dc2626' } }; }),
+      barMaxWidth: 36,
+      borderRadius: [4,4,0,0],
+      label: { show: true, position: 'top', formatter: '{c}', color: '#6b7280', fontSize: 11 }
+    }]
+  });
+
+  // 3. 月度评分趋势
+  var months = t4GetMonthsInData();
+  var trendSeries = top10.slice(0, 5).map(function(r, i){
+    // 重新计算各月综合评分
+    var monthlyScores = months.map(function(m){
+      var mData = t2BoxData.filter(function(d){
+        if(d['物流商'] !== r.carrier) return false;
+        var dt = parseDate(d['提货时间']);
+        if(!dt) return false;
+        var mKey = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+        return mKey === m;
+      });
+      var mValid = mData.filter(isValidStat);
+      var mValidQty = mValid.reduce(function(s,d){ return s + qtyOf(d); }, 0);
+      var mExcQty = mValid.filter(isExc).reduce(function(s,d){ return s + qtyOf(d); }, 0);
+      var mCompRate = mValidQty > 0 ? (mValidQty - mExcQty) / mValidQty * 100 : 0;
+      var mTimeScore = Math.min(mCompRate / 95 * 100, 100);
+      var mChkQty = mData.filter(isChk).reduce(function(s,d){ return s + qtyOf(d); }, 0);
+      var mTotalQty = mData.reduce(function(s,d){ return s + qtyOf(d); }, 0);
+      var mExcRate = mValidQty > 0 ? mExcQty / mValidQty * 100 : 0;
+      var mChkRate = mTotalQty > 0 ? mChkQty / mTotalQty * 100 : 0;
+      var mAnomalyRate = mExcRate * 0.7 + mChkRate * 0.3;
+      var mAnomalyScore = Math.max((1 - mAnomalyRate / 100) * 100, 0);
+      var mServiceScore = (t4GetServiceScore(r.carrier, m) || 0) * 20;
+      // 简化：成本和稳定性用全局值
+      var mTotal = mTimeScore * T4_WEIGHTS['时效'] + r.costScore * T4_WEIGHTS['成本'] + mServiceScore * T4_WEIGHTS['服务'] + r.stabilityScore * T4_WEIGHTS['稳定性'] + mAnomalyScore * T4_WEIGHTS['异常'];
+      return Math.round(mTotal * 10) / 10;
+    });
+    return { name: r.carrier, type: 'line', smooth: true, data: monthlyScores, itemStyle: { color: PALETTE[i] }, lineStyle: { color: PALETTE[i] } };
+  });
+  t3SetOption('t4-c-trend', {
+    tooltip: { trigger: 'axis' },
+    legend: { bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
+    grid: { left: 10, right: 20, top: 20, bottom: 50, containLabel: true },
+    xAxis: { type: 'category', data: months, axisLabel: { color: '#6b7280', fontSize: 11 } },
+    yAxis: { type: 'value', name: '评分', max: 100, axisLabel: { color: '#9ca3af' } },
+    series: trendSeries
+  });
+
+  // 4. 各维度得分对比
+  var dimNames = ['时效', '成本', '服务', '稳定性', '异常'];
+  var dimKeys = ['timeScore', 'costScore', 'serviceScore', 'stabilityScore', 'anomalyScore'];
+  var dimSeries = top10.slice(0, 5).map(function(r, i){
+    return {
+      name: r.carrier,
+      type: 'bar',
+      data: dimKeys.map(function(k){ return r[k] || 0; }),
+      itemStyle: { color: PALETTE[i], borderRadius: [3,3,0,0] },
+      barMaxWidth: 20
+    };
+  });
+  t3SetOption('t4-c-dimcompare', {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
+    grid: { left: 10, right: 20, top: 20, bottom: 50, containLabel: true },
+    xAxis: { type: 'category', data: dimNames, axisLabel: { color: '#4c1d95', fontSize: 12, fontWeight: 600 } },
+    yAxis: { type: 'value', name: '得分', max: 100, axisLabel: { color: '#9ca3af' } },
+    series: dimSeries
+  });
+}
+
+function t4RenderServiceArea(){
+  var months = t4GetMonthsInData();
+  var carriers = uniqueVals(t4GetFilteredBoxData(), '物流商').filter(function(c){ return c && c !== 'nan' && c !== '未指定'; }).sort();
+  var html = '';
+
+  if(months.length === 0){
+    html = '<div class="empty">请先选择时间范围</div>';
+  } else {
+    // 表头
+    html += '<div style="display:flex;flex-wrap:wrap;gap:16px">';
+    months.forEach(function(m){
+      html += '<div style="min-width:280px;flex:1">'+
+        '<div style="font-weight:600;color:#7c3aed;margin-bottom:6px;padding:6px 10px;background:#f5f3ff;border-radius:8px">'+m+' 服务打分</div>';
+      carriers.forEach(function(c){
+        var stars = t4GetServiceScore(c, m);
+        var starHtml = '';
+        for(var i = 1; i <= 5; i++){
+          starHtml += '<span class="star'+(i<=stars?' active':'')+'" onclick="t4ClickStar(\''+escapeAttr(c)+'\',\''+m+'\','+i+')">★</span>';
+        }
+        html += '<div class="service-row">'+
+          '<span class="carrier-name">'+escapeHtml(c)+'</span>'+
+          '<span class="star-rating">'+starHtml+'</span>'+
+          '<span class="score-text">'+(stars>0?(stars*20)+'分':'未评')+'</span>'+
+          '</div>';
+      });
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('t4-serviceArea').innerHTML = html;
+}
+
+function t4ClickStar(carrier, month, stars){
+  var current = t4GetServiceScore(carrier, month);
+  // 如果点的是当前已选的星，则取消
+  if(current === stars) stars = 0;
+  t4SetServiceScore(carrier, month, stars);
+  t4RenderServiceArea();
+  t4Render();
+}
+
+function t4ShowDetail(carrier){
+  var results = t4CalcRatings();
+  var r = results[carrier];
+  if(!r) return;
+
+  var html = '<div style="margin-bottom:16px">'+
+    '<h3 style="color:#4c1d95;margin-bottom:12px">'+escapeHtml(carrier)+' 评级详情</h3>'+
+    '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px">'+
+    '<div class="kpi"><div class="k-label">综合评分</div><div class="k-value" style="color:'+ (r.totalScore>=85?'#059669':r.totalScore>=70?'#7c3aed':r.totalScore>=60?'#d97706':'#dc2626') +'">'+r.totalScore+'</div><div class="k-sub"><span class="rating-badge rating-'+r.grade+'">'+r.grade+'级</span></div></div>'+
+    '<div class="kpi"><div class="k-label">时效得分</div><div class="k-value">'+r.timeScore+'</div><div class="k-sub">达标率 '+r.compRate+'%</div></div>'+
+    '<div class="kpi"><div class="k-label">成本得分</div><div class="k-value">'+r.costScore+'</div><div class="k-sub">'+(r.avgPrice>0?'¥'+r.avgPrice+'/kg':'无数据')+'</div></div>'+
+    '<div class="kpi"><div class="k-label">服务得分</div><div class="k-value">'+(r.serviceScore>0?r.serviceScore:'-')+'</div><div class="k-sub">'+(r.serviceScore>0?Math.round(r.serviceScore/20)+'星':'未评分')+'</div></div>'+
+    '<div class="kpi"><div class="k-label">异常得分</div><div class="k-value">'+r.anomalyScore+'</div><div class="k-sub">超时'+r.excRate+'% / 查验'+r.chkRate+'%</div></div>'+
+    '</div>'+
+    '<div class="kpi" style="margin-bottom:12px"><div class="k-label">稳定性得分</div><div class="k-value" style="font-size:22px">'+r.stabilityScore+'</div><div class="k-sub">各月达标率波动度</div></div>'+
+    '</div>';
+
+  // 雷达图
+  html += '<div class="chart-card" style="width:100%"><div class="ctitle">'+escapeHtml(carrier)+' 五维雷达图</div><div id="t4-detail-radar" style="width:100%;height:400px"></div></div>';
+
+  // 月度达标率趋势
+  if(r.months && r.months.length > 0){
+    html += '<div class="chart-card" style="margin-top:12px;width:100%"><div class="ctitle">月度达标率趋势</div><div id="t4-detail-trend" style="width:100%;height:280px"></div></div>';
+  }
+
+  openModal(carrier + ' 评级详情', html);
+
+  // 渲染雷达图（延迟300ms等待modal动画完成）
+  setTimeout(function(){
+    var radarEl = document.getElementById('t4-detail-radar');
+    if(radarEl){
+      radarEl.style.width = radarEl.parentElement.clientWidth - 36 + 'px';
+      var rc = echarts.init(radarEl);
+      allCharts['t4-detail-radar'] = rc;
+      rc.setOption({
+        tooltip: { trigger: 'item' },
+        radar: {
+          indicator: [
+            {name:'时效(35%)', max:100}, {name:'成本(25%)', max:100}, {name:'服务(15%)', max:100}, {name:'稳定性(10%)', max:100}, {name:'异常(10%)', max:100}
+          ],
+          center: ['50%','50%'],
+          radius: '70%',
+          splitArea: { areaStyle: { color: ['#faf8ff','#f5f3ff'] } },
+          axisName: { color: '#4c1d95', fontSize: 13, fontWeight: 600 }
+        },
+        series: [{
+          type: 'radar',
+          data: [{
+            value: [r.timeScore, r.costScore, r.serviceScore || 0, r.stabilityScore, r.anomalyScore],
+            name: carrier,
+            areaStyle: { color: 'rgba(124,58,237,0.2)' },
+            lineStyle: { color: '#7c3aed', width: 2 },
+            itemStyle: { color: '#7c3aed' }
+          }]
+        }]
+      });
+      rc.resize();
+    }
+
+    // 月度趋势
+    var trendEl = document.getElementById('t4-detail-trend');
+    if(trendEl && r.months && r.months.length > 0){
+      trendEl.style.width = trendEl.parentElement.clientWidth - 36 + 'px';
+      var tc = echarts.init(trendEl);
+      allCharts['t4-detail-trend'] = tc;
+      tc.setOption({
+        tooltip: { trigger: 'axis' },
+        grid: { left: 10, right: 20, top: 20, bottom: 30, containLabel: true },
+        xAxis: { type: 'category', data: r.months, axisLabel: { color: '#6b7280', fontSize: 10 } },
+        yAxis: { type: 'value', max: 100, axisLabel: { color: '#9ca3af', formatter: '{value}%' } },
+        series: [{
+          type: 'line',
+          smooth: true,
+          data: r.monthlyCompRates.map(function(v){ return Math.round(v * 100) / 100; }),
+          itemStyle: { color: '#7c3aed' },
+          areaStyle: { color: 'rgba(124,58,237,0.15)' },
+          label: { show: true, position: 'top', formatter: '{c}%', fontSize: 10, color: '#6b7280' }
+        }]
+      });
+      tc.resize();
+    }
+  }, 300);
+}
+
+function t4ShowMethod(){
+  var html = '<div style="max-width:680px;line-height:1.8;font-size:14px">'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">评级模型</b><br>'+
+    '综合评分 = 时效(35%) + 成本(25%) + 服务(15%) + 稳定性(10%) + 异常(10%)，每个维度满分100分。<br>'+
+    '评级标准：A级 ≥ 85分 | B级 70-84分 | C级 60-69分 | D级 < 60分。</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">时效维度 (35%)</b><br>'+
+    '达标率 = 达标件数 / 有效统计件数 × 100%（按件数计算）。<br>'+
+    '得分 = 达标率 / 95% × 100，上限100分。即达标率95%即为满分。</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">成本维度 (25%)</b><br>'+
+    '单kg均价 = 总金额 / 计费重。同运输类型内对比，最低均价 = 100分，其他按比例计算。<br>'+
+    '最终得分按各运输类型的计费重占比加权平均，确保空运对标空运、海运对标海运。</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">服务维度 (15%)</b><br>'+
+    '人工按月打分（1-5星），每星 = 20分（5星=100分）。<br>'+
+    '评分数据保存在浏览器本地(localStorage)，切换设备后需重新打分。</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">稳定性维度 (10%)</b><br>'+
+    '计算各月达标率的标准差(σ)，得分 = 100 - (σ × 2)，下限0分。<br>'+
+    '标准差越小代表表现越稳定，忽高忽低的物流商会被扣分。</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">异常维度 (10%)</b><br>'+
+    '综合异常率 = 超时异常率 × 70% + 查验率 × 30%。<br>'+
+    '超时权重更高(70%)，因为超时是物流商自身可控的；查验(30%)有一定随机性。<br>'+
+    '得分 = (1 - 综合异常率/100) × 100。</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px"><b style="color:#7c3aed">时间区间选择</b><br>'+
+    '按月：可多选月份，评级基于所选月份数据汇总；<br>'+
+    '按季度：可多选季度(Q1-Q4)；<br>'+
+    '自定义：自由选择起止日期。稳定性维度的月度波动分析始终基于所选范围内的月份数据。</div>'+
+    '</div>';
+  openModal('供应商评级口径说明', html);
+}
+
+var T4_CHART_IDS = ['t4-c-radar','t4-c-ranking','t4-c-trend','t4-c-dimcompare'];
+function t4InitCharts(){ T4_CHART_IDS.forEach(initChart); }
+
+// ============================================================
+// Tab5: 渠道推荐
+// ============================================================
+var t5Filters = { '运输类型':[], '发货地':[], '一级分类':[], '目的地分类':[], '时效要求':[] };
+var t5Mselects = {};
+var t5PriceWindow = 7; // 默认近1周
+
+function t5InitFilters(){
+  var cfgs = [
+    {id:'t5-f-transport', key:'运输类型', opts:uniqueVals(frData,'运输类型').filter(function(v){ return v && v!=='nan'; })},
+    {id:'t5-f-origin', key:'发货地', opts:uniqueVals(frData,'发货地').filter(function(v){ return v && v!=='nan'; })},
+    {id:'t5-f-cat', key:'一级分类', opts:uniqueVals(frData,'一级分类').filter(function(v){ return v && v!=='nan'; })},
+    {id:'t5-f-dest', key:'目的地分类', opts:uniqueVals(frData,'目的地分类').filter(function(v){ return v && v!=='nan'; })},
+    {id:'t5-f-period', key:'时效要求', opts:uniqueVals(frData,'时效要求').filter(function(v){ return v && v!=='nan'; })}
+  ];
+  cfgs.forEach(function(c){ t5Mselects[c.key] = initMselect(c.id, c.key, c.opts, t5Filters, t5Render); });
+}
+
+function t5Reset(){
+  for(var k in t5Mselects){ t5Mselects[k].reset(); }
+  t5Render();
+}
+
+function t5SetPriceWindow(days, evt){
+  t5PriceWindow = days;
+  document.querySelectorAll('#t5-priceWindow .src-tab').forEach(function(t){ t.classList.remove('active'); });
+  var btn = (evt && evt.target) ? evt.target : document.querySelector('#t5-priceWindow .src-tab[onclick*="'+days+'"]');
+  if(btn) btn.classList.add('active');
+  t5Render();
+}
+
+// 价格输入存储
+function t5GetPriceInputKey(carrier, channel){
+  return 't5_price|'+carrier+'|'+channel;
+}
+function t5GetPriceInput(carrier, channel){
+  var v = localStorage.getItem(t5GetPriceInputKey(carrier, channel));
+  return v ? parseFloat(v) : null;
+}
+function t5SetPriceInput(carrier, channel, val){
+  var key = t5GetPriceInputKey(carrier, channel);
+  if(val && val > 0) localStorage.setItem(key, val);
+  else localStorage.removeItem(key);
+}
+
+function t5FilterFr(d){
+  for(var k in t5Filters){
+    if(t5Filters[k].length && t5Filters[k].indexOf(String(d[k])) === -1) return false;
+  }
+  return true;
+}
+
+function t5FilterBox(d){
+  // 箱数据字段名不同，做映射
+  if(t5Filters['运输类型'].length && t5Filters['运输类型'].indexOf(String(d['运输类型'])) === -1) return false;
+  if(t5Filters['发货地'].length && t5Filters['发货地'].indexOf(String(d['发货仓库'])) === -1) return false;
+  if(t5Filters['一级分类'].length && t5Filters['一级分类'].indexOf(String(d['一级分类'])) === -1) return false;
+  if(t5Filters['时效要求'].length && t5Filters['时效要求'].indexOf(String(d['时效要求'])) === -1) return false;
+  // 目的地分类 → 仓库类型映射（近似）
+  if(t5Filters['目的地分类'].length){
+    var whType = String(d['仓库类型']||'');
+    if(t5Filters['目的地分类'].indexOf(whType) === -1) return false;
+  }
+  return true;
+}
+
+function t5Render(){
+  var frFiltered = frData.filter(t5FilterFr);
+  var boxFiltered = t2BoxData.filter(t5FilterBox);
+
+  // 按 物流商+物流渠道 分组
+  var groups = {};
+  frFiltered.forEach(function(d){
+    var carrier = d['物流商'] || '未知';
+    var channel = d['物流渠道'] || '未知';
+    var key = carrier + '||' + channel;
+    if(!groups[key]) groups[key] = { carrier:carrier, channel:channel, frRecords:[], boxRecords:[] };
+    groups[key].frRecords.push(d);
+  });
+
+  // 匹配箱数据（用于达标率和异常率）
+  boxFiltered.forEach(function(d){
+    var carrier = d['物流商'] || '未知';
+    var channel = d['物流渠道'] || '';
+    // 箱数据可能没有物流渠道字段，用物流商匹配
+    Object.keys(groups).forEach(function(key){
+      if(groups[key].carrier === carrier){
+        // 如果箱数据有物流渠道且不匹配则跳过
+        if(channel && groups[key].channel !== '未知' && channel !== groups[key].channel) return;
+        groups[key].boxRecords.push(d);
+      }
+    });
+  });
+
+  // 计算每个渠道组合的指标
+  var now = new Date();
+  var windowMs = t5PriceWindow * 86400000;
+  var results = [];
+
+  Object.keys(groups).forEach(function(key){
+    var g = groups[key];
+    var frRecs = g.frRecords;
+    var boxRecs = g.boxRecords;
+    if(frRecs.length === 0 && boxRecs.length === 0) return;
+
+    // 达标率（从箱数据）
+    var validData = boxRecs.filter(isValidStat);
+    var validQty = validData.reduce(function(s,d){ return s + qtyOf(d); }, 0);
+    var excQty = validData.filter(isExc).reduce(function(s,d){ return s + qtyOf(d); }, 0);
+    var compRate = validQty > 0 ? (validQty - excQty) / validQty * 100 : -1;
+    var totalQty = boxRecs.reduce(function(s,d){ return s + qtyOf(d); }, 0);
+    var chkQty = boxRecs.filter(isChk).reduce(function(s,d){ return s + qtyOf(d); }, 0);
+    var chkRate = totalQty > 0 ? chkQty / totalQty * 100 : 0;
+    var excRate = validQty > 0 ? excQty / validQty * 100 : 0;
+
+    // 近期均价（从运费数据，按时间窗口）
+    var recentFr = frRecs.filter(function(d){
+      var dt = parseDate(d['提货日期']);
+      return dt && (now.getTime() - dt.getTime()) <= windowMs;
+    });
+    var prevWindowFr = frRecs.filter(function(d){
+      var dt = parseDate(d['提货日期']);
+      return dt && (now.getTime() - dt.getTime()) > windowMs && (now.getTime() - dt.getTime()) <= windowMs * 2;
+    });
+
+    var recentCw = 0, recentAmt = 0;
+    recentFr.forEach(function(d){
+      var cw = parseFloat(d['计费重'])||0;
+      var amt = parseFloat(d['总金额'])||0;
+      if(cw > 0 && amt > 0){ recentCw += cw; recentAmt += amt; }
+    });
+    var recentAvg = recentCw > 0 ? recentAmt / recentCw : 0;
+
+    var prevCw = 0, prevAmt = 0;
+    prevWindowFr.forEach(function(d){
+      var cw = parseFloat(d['计费重'])||0;
+      var amt = parseFloat(d['总金额'])||0;
+      if(cw > 0 && amt > 0){ prevCw += cw; prevAmt += amt; }
+    });
+    var prevAvg = prevCw > 0 ? prevAmt / prevCw : 0;
+
+    // 价格趋势
+    var trend = 'flat';
+    var trendPct = 0;
+    if(recentAvg > 0 && prevAvg > 0){
+      trendPct = Math.round((recentAvg - prevAvg) / prevAvg * 100);
+      if(trendPct < -3) trend = 'down';
+      else if(trendPct > 3) trend = 'up';
+    }
+
+    // 价格区间
+    var priceMin = 0, priceMax = 0;
+    var priceList = [];
+    frRecs.forEach(function(d){
+      var cw = parseFloat(d['计费重'])||0;
+      var amt = parseFloat(d['总金额'])||0;
+      if(cw > 0 && amt > 0) priceList.push(amt / cw);
+    });
+    if(priceList.length > 0){
+      priceMin = Math.min.apply(null, priceList);
+      priceMax = Math.max.apply(null, priceList);
+    }
+
+    // 用户输入价格
+    var userInput = t5GetPriceInput(g.carrier, g.channel);
+    var usePrice = userInput || recentAvg;
+
+    // 样本量
+    var sampleCount = frRecs.length + boxRecs.length;
+
+    results.push({
+      carrier: g.carrier,
+      channel: g.channel,
+      compRate: compRate,
+      excRate: Math.round(excRate * 100) / 100,
+      chkRate: Math.round(chkRate * 100) / 100,
+      recentAvg: Math.round(recentAvg * 100) / 100,
+      prevAvg: Math.round(prevAvg * 100) / 100,
+      trend: trend,
+      trendPct: trendPct,
+      priceMin: Math.round(priceMin * 100) / 100,
+      priceMax: Math.round(priceMax * 100) / 100,
+      userInput: userInput,
+      usePrice: Math.round(usePrice * 100) / 100,
+      sampleCount: sampleCount,
+      frCount: frRecs.length,
+      boxCount: boxRecs.length,
+      recentCount: recentFr.length,
+      totalQty: Math.round(totalQty),
+      validQty: Math.round(validQty)
+    });
+  });
+
+  // 排序：用户价格升序 + 达标率降序 + 异常率升序
+  results.sort(function(a, b){
+    // 价格越低越好
+    if(a.usePrice > 0 && b.usePrice > 0 && a.usePrice !== b.usePrice) return a.usePrice - b.usePrice;
+    // 达标率越高越好
+    if(a.compRate >= 0 && b.compRate >= 0 && a.compRate !== b.compRate) return b.compRate - a.compRate;
+    // 异常率越低越好
+    if(a.excRate !== b.excRate) return a.excRate - b.excRate;
+    return 0;
+  });
+
+  t5RenderResults(results);
+  document.getElementById('t5-filterCount').textContent = '匹配: ' + results.length + ' 个渠道';
+}
+
+function t5RenderResults(results){
+  var html = '';
+
+  if(results.length === 0){
+    html = '<div class="detail" style="margin-top:16px"><div class="empty">未匹配到渠道数据，请调整筛选条件</div></div>';
+    document.getElementById('t5-recommendArea').innerHTML = html;
+    return;
+  }
+
+  // 分组：推荐 / 样本少 / 不推荐
+  var recommended = results.filter(function(r){ return r.sampleCount >= 3 && r.compRate >= 0 && r.compRate >= 60; });
+  var warnSample = results.filter(function(r){ return r.sampleCount >= 3 && (r.compRate < 0 || r.compRate < 60); });
+  var fewSample = results.filter(function(r){ return r.sampleCount < 3; });
+
+  var rank = 0;
+  var renderCard = function(r, isWarn, isFew){
+    var cardClass = 'rec-card';
+    var rankClass = 'rec-rank';
+    var gradeText = '';
+    var gradeBg = '';
+
+    if(isFew){
+      cardClass += ' rec-warn';
+      rankClass += ' rec-warn';
+      gradeText = '样本不足';
+      gradeBg = '#d97706';
+    } else if(isWarn){
+      cardClass += ' rec-na';
+      rankClass += ' rec-na';
+      gradeText = '不推荐';
+      gradeBg = '#dc2626';
+    } else {
+      if(r.compRate >= 85 && r.excRate <= 10){ cardClass += ' rec-a'; rankClass += ' rec-a'; gradeText = '优选'; gradeBg = '#059669'; }
+      else { cardClass += ' rec-b'; gradeText = '可选'; gradeBg = '#7c3aed'; }
+      rank++;
+    }
+
+    var rankNum = isFew ? '!' : (isWarn ? '×' : rank);
+    var trendHtml = '';
+    if(r.recentAvg > 0){
+      if(r.trend === 'down') trendHtml = '<span class="rec-trend-down">↓ '+Math.abs(r.trendPct)+'%</span>';
+      else if(r.trend === 'up') trendHtml = '<span class="rec-trend-up">↑ '+r.trendPct+'%</span>';
+      else trendHtml = '<span class="rec-trend-flat">→ 平稳</span>';
+    }
+
+    var priceHint = r.recentAvg > 0 ? '近期均价 ¥'+r.recentAvg+'/kg' : '无近期价格数据';
+    if(r.priceMin > 0 && r.priceMax > 0) priceHint += ' (区间 ¥'+r.priceMin+'~¥'+r.priceMax+')';
+
+    // 推荐理由
+    var reason = '';
+    if(isFew){
+      reason = '该渠道在当前筛选条件下仅有 '+r.sampleCount+' 条记录，数据不足以做可靠推荐。';
+    } else if(isWarn){
+      reason = '达标率仅 '+r.compRate+'%，超时率 '+r.excRate+'%';
+      if(r.chkRate > 0) reason += '，查验率 '+r.chkRate+'%';
+      reason += '。虽然价格可能较低，但时效和可靠性存在风险。';
+    } else {
+      var parts = [];
+      if(r.compRate >= 85) parts.push('时效达标率高('+r.compRate+'%)');
+      if(r.excRate <= 5) parts.push('超时率低('+r.excRate+'%)');
+      if(r.chkRate <= 2) parts.push('查验率低('+r.chkRate+'%)');
+      if(r.trend === 'down') parts.push('价格近期走低');
+      if(r.usePrice > 0 && r.usePrice <= 10) parts.push('价格有竞争力(¥'+r.usePrice+'/kg)');
+      reason = parts.length > 0 ? '优势：' + parts.join('，') + '。' : '综合表现尚可。';
+    }
+
+    var escCarrier = escapeAttr(r.carrier);
+    var escChannel = escapeAttr(r.channel);
+    var inputVal = r.userInput ? r.userInput : '';
+
+    html += '<div class="'+cardClass+'">'+
+      '<div class="rec-head">'+
+        '<div class="'+rankClass+'">'+rankNum+'</div>'+
+        '<div class="rec-channel">'+escapeHtml(r.carrier)+' / '+escapeHtml(r.channel)+'</div>'+
+        '<span class="rec-grade" style="background:'+gradeBg+'">'+gradeText+'</span>'+
+        '<span style="font-size:12px;color:#9ca3af;margin-left:auto">'+r.sampleCount+'条记录 (运费'+r.frCount+' / 箱'+r.boxCount+')</span>'+
+      '</div>'+
+      '<div class="rec-body">'+
+        '<div class="rec-stat"><div class="l">时效达标率</div><div class="v">'+(r.compRate>=0?r.compRate+'%':'<span class="sub">无数据</span>')+'</div></div>'+
+        '<div class="rec-stat"><div class="l">超时率</div><div class="v">'+r.excRate+'%</div></div>'+
+        '<div class="rec-stat"><div class="l">查验率</div><div class="v">'+(r.chkRate>0?r.chkRate+'%':'-')+'</div></div>'+
+        '<div class="rec-stat"><div class="l">近期均价</div><div class="v">'+(r.recentAvg>0?'¥'+r.recentAvg+'/kg':'<span class="sub">无数据</span>')+' <span class="sub">'+(r.recentCount+'条')+'</span></div></div>'+
+      '</div>'+
+      '<div class="rec-price-row">'+
+        '<label>本周单价:</label>'+
+        '<input type="number" class="rec-price-input" placeholder="'+(r.recentAvg>0?'¥'+r.recentAvg:'填价格')+'" value="'+inputVal+'" oninput="t5OnPriceInput(\''+escCarrier+'\',\''+escChannel+'\',this.value)" step="0.1">'+
+        '<span class="rec-price-hint">'+priceHint+'</span>'+
+        (r.recentAvg > 0 ? '<span class="rec-price-trend '+ (r.trend==='down'?'rec-trend-down':r.trend==='up'?'rec-trend-up':'rec-trend-flat') +'">'+trendHtml+'</span>' : '')+
+      '</div>'+
+      '<div class="rec-reason">'+reason+'</div>'+
+      '</div>';
+  };
+
+  if(recommended.length > 0){
+    html += '<div style="font-size:16px;font-weight:700;color:#4c1d95;margin:20px 0 12px;padding-left:12px;border-left:4px solid #7c3aed">推荐渠道</div>';
+    recommended.forEach(function(r){ renderCard(r, false, false); });
+  }
+
+  if(fewSample.length > 0){
+    html += '<div style="font-size:16px;font-weight:700;color:#d97706;margin:20px 0 12px;padding-left:12px;border-left:4px solid #d97706">样本不足</div>';
+    fewSample.forEach(function(r){ renderCard(r, false, true); });
+  }
+
+  if(warnSample.length > 0){
+    html += '<div style="font-size:16px;font-weight:700;color:#dc2626;margin:20px 0 12px;padding-left:12px;border-left:4px solid #dc2626">不推荐</div>';
+    warnSample.forEach(function(r){ renderCard(r, true, false); });
+  }
+
+  document.getElementById('t5-recommendArea').innerHTML = html;
+}
+
+function t5OnPriceInput(carrier, channel, val){
+  var num = parseFloat(val);
+  t5SetPriceInput(carrier, channel, num);
+  // 实时重算（防抖）
+  clearTimeout(window._t5Timer);
+  window._t5Timer = setTimeout(function(){ t5Render(); }, 400);
+}
+
+function t5ShowMethod(){
+  var html = '<div style="max-width:680px;line-height:1.8;font-size:14px">'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">渠道推荐逻辑</b><br>'+
+    '根据您选择的条件（运输类型/发货地/一级分类/目的地分类/时效要求），从历史数据中匹配同类发货记录，按"物流商+物流渠道"组合统计达标率、异常率和价格，自动排序推荐。</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">价格计算</b><br>'+
+    '优先使用您手动填入的"本周单价"。如未填写，则自动使用"近期均价"（按选择的时间窗口1/2/4/8周计算）。<br>'+
+    '近期均价 = 该渠道在时间窗口内的总金额 / 总计费重。'+
+    '价格趋势 = 当前窗口均价 vs 上一个同等窗口均价，变化超3%显示涨跌。</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">推荐分级</b><br>'+
+    '优选：达标率≥85% 且 超时率≤10%<br>'+
+    '可选：达标率≥60% 且 超时率可接受<br>'+
+    '不推荐：达标率<60% 或 超时率过高<br>'+
+    '样本不足：历史记录<3条，数据不可靠</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px;margin-bottom:12px"><b style="color:#7c3aed">排序规则</b><br>'+
+    '推荐渠道内按：价格(升序) → 达标率(降序) → 异常率(升序) 排列。填入价格后实时重新排序。</div>'+
+    '<div style="background:#faf8ff;border-radius:8px;padding:14px"><b style="color:#7c3aed">数据来源</b><br>'+
+    '时效达标率/超时率/查验率：来自箱维度数据（与Tab2一致的口径）。<br>'+
+    '价格/均价：来自大货运费表（与Tab3一致的计费重和总金额字段）。<br>'+
+    '手填价格保存在浏览器本地，切换设备需重新填写。</div>'+
+    '</div>';
+  openModal('渠道推荐说明', html);
+}
+
+
 window.addEventListener('DOMContentLoaded', function(){
   t1InitCharts(); t1InitFilters(); t1Render();
   t2InitCharts(); t2InitFilters(); t2Render();
   t3InitFilters(); t3InitCharts(); t3Render();
+  t4InitCharts(); t4InitFilters(); t4Render();
+  t5InitFilters(); t5Render();
 });
