@@ -754,7 +754,7 @@
   </div>
 </div>
 
-<script src="all_data.js?v=20260819a"></script>
+<script src="all_data.js?v=20260819b"></script>
 <script>
 // ============ 数据 ============
 var BOX_FIELDS = RAW.box.fields;
@@ -1193,11 +1193,9 @@ function t2ShowCarrierDetail(carrier){
   var exc=validData.filter(isExc);
   var html='<div style="margin-bottom:16px"><h3 style="color:#4c1d95;margin-bottom:8px">'+escapeHtml(carrier)+' 详情</h3><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px"><div class="kpi"><div class="k-label">总箱数</div><div class="k-value">'+data.length+'</div></div><div class="kpi"><div class="k-label">总件数</div><div class="k-value">'+Math.round(totalQty).toLocaleString()+'</div></div><div class="kpi"><div class="k-label">超时件数</div><div class="k-value" style="color:#dc2626">'+Math.round(excQty).toLocaleString()+'</div></div><div class="kpi"><div class="k-label">查验件数</div><div class="k-value" style="color:#c2410c">'+Math.round(chkQty).toLocaleString()+'</div></div><div class="kpi"><div class="k-label">达标率(按件)</div><div class="k-value">'+(validQty?((validQty-excQty)/validQty*100).toFixed(2):0)+'%</div></div></div></div>';
   html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0"><div class="chart-card"><div class="ctitle">月度达标率/超时率趋势</div><div class="chart-box" id="t2-detail-trend" style="height:240px"></div></div><div class="chart-card"><div class="ctitle">运输类型达标率</div><div class="chart-box" id="t2-detail-transport" style="height:240px"></div></div></div>';
-  html+='<h4 style="color:#4c1d95;margin:12px 0 8px">异常订单明细 (前50条) <span style="font-size:12px;color:#9ca3af;font-weight:normal">点击行可查看单号详情</span></h4><div style="overflow-x:auto;max-height:400px"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#f5f3ff"><th style="padding:8px;text-align:left">入库单号</th><th style="padding:8px;text-align:left">箱号</th><th style="padding:8px;text-align:left">运输类型</th><th style="padding:8px;text-align:left">提货时间</th><th style="padding:8px;text-align:left">目的仓</th><th style="padding:8px;text-align:left">件数</th><th style="padding:8px;text-align:left">异常类型</th></tr></thead><tbody>';
-  exc.slice(0,50).forEach(function(d){html+='<tr style="border-bottom:1px solid #f3f0ff;cursor:pointer" onclick="closeModal();switchTab(\'tab1\');setTimeout(function(){document.getElementById(\'t1-lookupInput\').value=\''+escapeAttr(d['入库单号'])+'\';t1DoLookup();},100)"><td style="padding:6px 8px">'+escapeHtml(d['入库单号'])+'</td><td style="padding:6px 8px">'+escapeHtml(d['箱号'])+'</td><td style="padding:6px 8px">'+escapeHtml(d['运输类型'])+'</td><td style="padding:6px 8px">'+fmtT(d['提货时间'])+'</td><td style="padding:6px 8px">'+escapeHtml(d['目的仓库'])+'</td><td style="padding:6px 8px">'+qtyOf(d)+'</td><td style="padding:6px 8px">'+escapeHtml(d['物流异常']||'-')+'</td></tr>';});
-  html+='</tbody></table></div>';
+  html+='<div id="t2-cdAnomalySection" style="margin-top:12px"></div>';
   openModal(carrier+' 详情',html);
-  setTimeout(function(){ t2RenderDetailCharts(data,carrier); }, 60);
+  setTimeout(function(){ t2RenderDetailCharts(data,carrier); t2RenderCarrierAnomaly(carrier); }, 60);
 }
 function t2RenderDetailCharts(data,carrier){
   // 月度趋势(按件数)
@@ -1216,6 +1214,76 @@ function t2RenderDetailCharts(data,carrier){
     var tcc=echarts.init(tEl);allCharts['t2-detail-transport']=tcc;
     tcc.setOption({tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:function(p){var s=tg[tNames[p[0].dataIndex]];return p[0].name+'<br/>达标率: '+p[0].value+'%<br/>总件数: '+Math.round(s.totalQty)+'<br/>超时件数: '+Math.round(s.excQty);}},grid:{left:10,right:20,top:20,bottom:30,containLabel:true},xAxis:{type:'category',data:tNames,axisLabel:{color:'#6b7280',fontSize:10}},yAxis:{type:'value',max:100,axisLabel:{color:'#9ca3af',formatter:'{value}%'}},series:[{type:'bar',data:tNames.map(function(t){return tg[t].totalQty?+((tg[t].totalQty-tg[t].excQty)/tg[t].totalQty*100).toFixed(2):0;}),itemStyle:{color:function(p){var v=p.value;return v>=80?'#7c3aed':(v>=60?'#c2410c':'#dc2626');},borderRadius:[4,4,0,0]},barMaxWidth:40,label:{show:true,position:'top',formatter:'{c}%',fontSize:10}}]});
   }
+}
+var t2CarrierDetailState={carrier:'',page:1,pageSize:50,sortField:'excQty',sortDir:'desc',rows:[],expanded:{}};
+function t2RenderCarrierAnomaly(carrier){
+  t2CarrierDetailState.carrier=carrier;t2CarrierDetailState.expanded={};
+  var data=t2BoxData.filter(function(d){return d['物流商']===carrier&&t2FilterBox(d);});
+  var groups={};
+  data.forEach(function(d){
+    var inNo=String(d['入库单号']||'');if(!inNo||inNo==='nan')return;
+    if(!groups[inNo])groups[inNo]={inNo:inNo,pickupDate:d['提货时间']||'',month:(d['收件年份']||'')+'-'+(d['收件月份']||''),totalQty:0,excQty:0,excOnlyQty:0,chkOnlyQty:0,boxes:[],anomalyTypes:{},delayDescs:{}};
+    var g=groups[inNo];var q=qtyOf(d);g.totalQty+=q;g.boxes.push(d);
+    var isE=isExc(d),isC=isChk(d);
+    if(isE||isC){
+      g.excQty+=q;
+      if(isE)g.excOnlyQty+=q;
+      if(isC)g.chkOnlyQty+=q;
+      var lg=String(d['物流异常']||'').trim(),up=String(d['上架异常']||'').trim();
+      if(lg&&lg!=='无异常'&&lg!=='nan')g.anomalyTypes['物流:'+lg]=(g.anomalyTypes['物流:'+lg]||0)+q;
+      if(up&&up!=='无异常'&&up!=='nan')g.anomalyTypes['上架:'+up]=(g.anomalyTypes['上架:'+up]||0)+q;
+      if(isC)g.anomalyTypes['查验']=(g.anomalyTypes['查验']||0)+q;
+      if(!isE&&!lg&&!up)g.anomalyTypes['超时']=(g.anomalyTypes['超时']||0)+q;
+    }
+    var desc=String(d['延迟说明']||'').trim();if(desc&&desc!=='nan')g.delayDescs[desc]=1;
+  });
+  var rows=Object.values(groups).filter(function(g){return g.excQty>0;});
+  var sf=t2CarrierDetailState.sortField,sd=t2CarrierDetailState.sortDir==='asc'?1:-1;
+  rows.sort(function(a,b){var av=a[sf],bv=b[sf];if(typeof av==='string'||typeof bv==='string'){return (av||'').localeCompare(bv||'')*sd;}return ((av||0)-(bv||0))*sd;});
+  t2CarrierDetailState.rows=rows;
+  var totalExcQty=rows.reduce(function(s,g){return s+g.excQty;},0);
+  var totalQtyAll=rows.reduce(function(s,g){return s+g.totalQty;},0);
+  var excOnlyTotal=rows.reduce(function(s,g){return s+g.excOnlyQty;},0);
+  var chkOnlyTotal=rows.reduce(function(s,g){return s+g.chkOnlyQty;},0);
+  var excPct=totalExcQty?Math.round(excOnlyTotal/totalExcQty*100):0;
+  var chkPct=totalExcQty?Math.round(chkOnlyTotal/totalExcQty*100):0;
+  var total=rows.length,pages=Math.ceil(total/t2CarrierDetailState.pageSize)||1;
+  if(t2CarrierDetailState.page>pages)t2CarrierDetailState.page=1;
+  var start=(t2CarrierDetailState.page-1)*t2CarrierDetailState.pageSize,pd=rows.slice(start,start+t2CarrierDetailState.pageSize);
+  var titleHtml='<div style="margin-bottom:10px"><div style="font-size:15px;font-weight:600;color:#4c1d95;display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:4px;height:16px;background:#7c3aed;border-radius:2px"></span>异常订单明细 · 共 '+total+' 个异常单号 · 共 '+Math.round(totalExcQty)+' 件</div><div style="font-size:12px;color:#6b7280;margin:4px 0 0 12px">其中 <span style="color:#dc2626;font-weight:600">超时 '+Math.round(excOnlyTotal)+' 件</span> (占 '+excPct+'%) · <span style="color:#b45309;font-weight:600">查验 '+Math.round(chkOnlyTotal)+' 件</span> (占 '+chkPct+'%) · 超时与查验可重叠</div></div>';
+  var cols=[{k:'inNo',l:'入库单号',sort:true},{k:'pickupDate',l:'提货时间',sort:true},{k:'totalQty',l:'件数',sort:true},{k:'excQty',l:'异常件数',sort:true},{k:'anomalyTypes',l:'异常类型',sort:false},{k:'delayDescs',l:'延迟说明',sort:false},{k:'_op',l:'操作',sort:false}];
+  var sortMark=function(k){if(t2CarrierDetailState.sortField!==k)return'';return t2CarrierDetailState.sortDir==='asc'?'▲':'▼';};
+  var theadHtml='<tr style="background:#f5f3ff;position:sticky;top:0">'+cols.map(function(c){var st=c.sort?';cursor:pointer':'';var clk=c.sort?' onclick="t2CarrierAnomalySortBy(\''+c.k+'\')"':'';return '<th style="padding:8px;text-align:left;color:#4c1d95;white-space:nowrap'+st+'"'+clk+'>'+c.l+'<span class="arrow" style="margin-left:4px">'+sortMark(c.k)+'</span></th>';}).join('')+'</tr>';
+  var tbodyHtml=pd.map(function(g,i){
+    var globalIdx=start+i;
+    var atHtml=(function(){var arr=Object.keys(g.anomalyTypes).map(function(k){return {k:k,v:g.anomalyTypes[k]};});arr.sort(function(a,b){return b.v-a.v;});return arr.map(function(o){var cls=o.k.indexOf('物流')===0?'tag-red':(o.k.indexOf('上架')===0?'tag-orange':'tag-yellow');return '<span class="tag '+cls+'">'+escapeHtml(o.k)+'</span>';}).join(' ')||'-';})();
+    var delayHtml=(function(){var arr=Object.keys(g.delayDescs);if(!arr.length)return '-';var text=arr.join(' | ');if(text.length>100){return '<span title="'+escapeAttr(arr.join('\n---\n'))+'" style="cursor:help;color:#c2410c;max-width:240px;display:inline-block;word-break:break-all">'+escapeHtml(text.slice(0,100))+'...</span>';}return '<span style="color:#c2410c;max-width:240px;display:inline-block;word-break:break-all">'+escapeHtml(text)+'</span>';})();
+    var ratio=g.totalQty?Math.round(g.excQty/g.totalQty*100):0;
+    var isExp=t2CarrierDetailState.expanded[globalIdx];
+    return '<tr id="cd-row-'+globalIdx+'" style="border-bottom:1px solid #f3f0ff"><td style="padding:6px 8px;font-weight:600;color:#4c1d95">'+escapeHtml(g.inNo)+'</td><td style="padding:6px 8px">'+fmtT(g.pickupDate)+'</td><td style="padding:6px 8px" title="'+g.boxes.length+'箱共'+g.totalQty+'件">'+g.totalQty+'</td><td style="padding:6px 8px"><span style="color:#dc2626;font-weight:600">'+g.excQty+'</span><span style="color:#9ca3af"> / '+g.totalQty+' ('+ratio+'%)</span></td><td style="padding:6px 8px">'+atHtml+'</td><td style="padding:6px 8px">'+delayHtml+'</td><td style="padding:6px 8px;text-align:center"><button onclick="t2CarrierAnomalyToggleExpand('+globalIdx+')" style="border:1px solid #ddd6fe;background:'+(isExp?'#7c3aed':'#fff')+';color:'+(isExp?'#fff':'#7c3aed')+';border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer">'+(isExp?'收起 ▲':'展开 '+g.boxes.length+' 箱 ▼')+'</button></td></tr><tr id="cd-sub-'+globalIdx+'" style="display:'+(isExp?'':'none')+'"><td colspan="7" style="padding:0;border-bottom:1px solid #ddd6fe"></td></tr>';
+  }).join('')||'<tr><td colspan="7" class="empty">无匹配数据</td></tr>';
+  var pagerHtml='<div class="pager" style="margin-top:10px"><button onclick="t2CarrierAnomalyGoPage(1)" '+(t2CarrierDetailState.page<=1?'disabled':'')+'>首页</button><button onclick="t2CarrierAnomalyGoPage('+(t2CarrierDetailState.page-1)+')" '+(t2CarrierDetailState.page<=1?'disabled':'')+'>上一页</button><span class="info">第 '+t2CarrierDetailState.page+' / '+pages+' 页</span><button onclick="t2CarrierAnomalyGoPage('+(t2CarrierDetailState.page+1)+')" '+(t2CarrierDetailState.page>=pages?'disabled':'')+'>下一页</button><button onclick="t2CarrierAnomalyGoPage('+pages+')" '+(t2CarrierDetailState.page>=pages?'disabled':'')+'>末页</button></div>';
+  var sec=document.getElementById('t2-cdAnomalySection');
+  if(sec)sec.innerHTML=titleHtml+'<div style="overflow-x:auto;max-height:400px"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead>'+theadHtml+'</thead><tbody>'+tbodyHtml+'</tbody></table></div>'+pagerHtml;
+  for(var k in t2CarrierDetailState.expanded){if(t2CarrierDetailState.expanded[k])t2CarrierAnomalyFillSub(parseInt(k));}
+}
+function t2CarrierAnomalySortBy(f){
+  if(t2CarrierDetailState.sortField===f){t2CarrierDetailState.sortDir=t2CarrierDetailState.sortDir==='asc'?'desc':'asc';}else{t2CarrierDetailState.sortField=f;t2CarrierDetailState.sortDir=(f==='excQty'||f==='totalQty')?'desc':'asc';}
+  t2RenderCarrierAnomaly(t2CarrierDetailState.carrier);
+}
+function t2CarrierAnomalyGoPage(p){t2CarrierDetailState.page=p;t2RenderCarrierAnomaly(t2CarrierDetailState.carrier);}
+function t2CarrierAnomalyToggleExpand(idx){
+  t2CarrierDetailState.expanded[idx]=!t2CarrierDetailState.expanded[idx];
+  var sub=document.getElementById('cd-sub-'+idx);
+  var btn=document.querySelector('#cd-row-'+idx+' button');
+  if(t2CarrierDetailState.expanded[idx]){if(sub)sub.style.display='';t2CarrierAnomalyFillSub(idx);if(btn){btn.style.cssText='border:1px solid #ddd6fe;background:#7c3aed;color:#fff;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer';btn.textContent='收起 ▲';}}
+  else{if(sub)sub.style.display='none';if(btn){btn.style.cssText='border:1px solid #ddd6fe;background:#fff;color:#7c3aed;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer';btn.textContent='展开 ▼';}}
+}
+function t2CarrierAnomalyFillSub(idx){
+  var sub=document.getElementById('cd-sub-'+idx);if(!sub)return;var g=t2CarrierDetailState.rows[idx];if(!g)return;
+  var cols=['箱号','运输类型','时效要求','提货时间','目的仓','计划数量','物流异常','上架异常','查验','延迟说明'];
+  var html='<div style="padding:10px;background:#faf8ff"><div style="font-size:12px;color:#6b7280;margin-bottom:8px">'+escapeHtml(g.inNo)+' 共 '+g.boxes.length+' 箱 / '+g.totalQty+' 件 · 异常 '+g.excQty+' 件 · <a href="javascript:void(0)" onclick="closeModal();switchTab(\'tab1\');setTimeout(function(){var inp=document.getElementById(\'t1-lookupInput\');if(inp){inp.value=\''+escapeAttr(g.inNo)+'\';t1DoLookup();}},100)" style="color:#7c3aed;text-decoration:underline">在Tab1查看时间轴 →</a></div><div style="overflow-x:auto;max-height:280px"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#ede9fe;position:sticky;top:0">'+cols.map(function(c){return '<th style="padding:6px;text-align:left;color:#4c1d95;white-space:nowrap">'+c+'</th>';}).join('')+'</tr></thead><tbody>'+g.boxes.map(function(d){var lg=String(d['物流异常']||'').trim(),up=String(d['上架异常']||'').trim();return '<tr style="border-bottom:1px solid #ede9fe"><td style="padding:5px 8px">'+escapeHtml(d['箱号']||'')+'</td><td style="padding:5px 8px">'+escapeHtml(d['运输类型']||'')+'</td><td style="padding:5px 8px">'+escapeHtml(d['时效要求']||'')+'</td><td style="padding:5px 8px">'+fmtT(d['提货时间'])+'</td><td style="padding:5px 8px">'+escapeHtml(d['目的仓库']||'')+'</td><td style="padding:5px 8px">'+qtyOf(d)+'</td><td style="padding:5px 8px">'+(lg&&lg!=='无异常'&&lg!=='nan'?'<span class="tag tag-red">'+escapeHtml(lg)+'</span>':'-')+'</td><td style="padding:5px 8px">'+(up&&up!=='无异常'&&up!=='nan'?'<span class="tag tag-orange">'+escapeHtml(up)+'</span>':'-')+'</td><td style="padding:5px 8px">'+(isChk(d)?'<span class="tag tag-yellow">查验</span>':'-')+'</td><td style="padding:5px 8px;color:#c2410c;max-width:220px;word-break:break-all">'+escapeHtml(d['延迟说明']||'')+'</td></tr>';}).join('')+'</tbody></table></div></div>';
+  sub.querySelector('td').innerHTML=html;
 }
 function t2Export(){
   var data=t2BoxData.filter(t2FilterBox);
