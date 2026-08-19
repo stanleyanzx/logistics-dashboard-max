@@ -457,7 +457,7 @@
     <div class="toolbar">
       <input type="text" id="t1-searchInput" placeholder="搜索 入库单号/SKU/产品名称/运单号(多个用空格或逗号分隔)..." oninput="t1OnSearch()">
       <select id="t1-searchStatus" onchange="t1OnSearch()"><option value="">全部物流状态</option></select>
-      <select id="t1-searchAbnormal" onchange="t1OnSearch()"><option value="">全部(异常/正常)</option><option value="是">仅异常</option><option value="否">仅正常</option></select>
+      <select id="t1-searchAbnormal" onchange="t1OnSearch()"><option value="">全部(异常/正常)</option><option value="是">仅异常</option><option value="否">仅正常</option><option value="物流异常">仅物流异常</option><option value="上架异常">仅上架异常</option></select>
       <button class="btn-export" onclick="t1ExportDetail()">导出Excel</button>
       <span style="margin-left:auto;font-size:13px;color:#6b7280" id="t1-detailCount"></span>
     </div>
@@ -753,7 +753,7 @@
   </div>
 </div>
 
-<script src="all_data.js?v=20260819a"></script>
+<script src="all_data.js?v=20260819b"></script>
 <script>
 // ============ 数据 ============
 var BOX_FIELDS = RAW.box.fields;
@@ -766,6 +766,13 @@ var TIME_MAP = RAW.timeMap || {};
 var BOX_TYPES = RAW.boxTypes || {};
 
 var boxData = BOX_ROWS.map(function(r){ var o={}; BOX_FIELDS.forEach(function(f,i){o[f]=r[i];}); return o; });
+// 箱维度索引：入库单号+箱号 → boxData记录（用于SKU明细关联异常类型）
+var boxIdx = {};
+boxData.forEach(function(d){ boxIdx[d['入库单号']+'|'+d['箱号']] = d; });
+function getBoxAnomaly(inNo, boxNo){ return boxIdx[inNo+'|'+boxNo] || null; }
+// 异常类型标签渲染
+function anomalyTag(d){ var b=getBoxAnomaly(d['入库单号'],d['箱号']); if(!b)return '-'; var lg=String(b['物流异常']||'').trim(), up=String(b['上架异常']||'').trim(); var h=''; if(lg&&lg!=='无异常'&&lg!=='')h+='<span class="tag tag-red" title="物流异常">物流:'+escapeHtml(lg)+'</span> '; if(up&&up!=='无异常'&&up!=='')h+='<span class="tag tag-orange" title="上架异常">上架:'+escapeHtml(up)+'</span>'; return h||'<span class="tag tag-green">正常</span>'; }
+function anomalyText(d){ var b=getBoxAnomaly(d['入库单号'],d['箱号']); if(!b)return ''; var lg=String(b['物流异常']||'').trim(), up=String(b['上架异常']||'').trim(); var p=[]; if(lg&&lg!=='无异常')p.push('物流:'+lg); if(up&&up!=='无异常')p.push('上架:'+up); return p.length?p.join(' | '):'正常'; }
 var skuData = SKU_ROWS.map(function(r){ var o={}; SKU_FIELDS.forEach(function(f,i){o[f]=r[i];}); return o; });
 var frData = FR_ROWS.map(function(r){ var o={}; FR_FIELDS.forEach(function(f,i){o[f]=r[i];}); return o; });
 
@@ -1052,13 +1059,15 @@ function t1ShowTimeline(gid,inNo,boxNo,boxIdx){
 // Tab1 SKU明细表
 var t1DetailState={page:1,pageSize:50,search:'',status:'',abnormal:'',sortField:'入库单号',sortDir:'asc'};
 function t1OnSearch(){t1DetailState.search=document.getElementById('t1-searchInput').value;t1DetailState.status=document.getElementById('t1-searchStatus').value;t1DetailState.abnormal=document.getElementById('t1-searchAbnormal').value;t1DetailState.page=1;t1RenderDetail();}
+function t1HasAnomaly(d,b,type){if(!b)return false;var v=String(b[type]||'').trim();return v&&v!=='无异常';}
+function t1FilterAbnormal(d){if(!t1DetailState.abnormal)return true;if(t1DetailState.abnormal==='是')return d['是否异常']==='是';if(t1DetailState.abnormal==='否')return d['是否异常']!=='是';var b=getBoxAnomaly(d['入库单号'],d['箱号']);if(!b)return false;return t1HasAnomaly(d,b,t1DetailState.abnormal);}
 function t1SortBy(f){if(t1DetailState.sortField===f){t1DetailState.sortDir=t1DetailState.sortDir==='asc'?'desc':'asc';}else{t1DetailState.sortField=f;t1DetailState.sortDir='asc';}t1RenderDetail();}
 function t1GoPage(p){t1DetailState.page=p;t1RenderDetail();}
 function t1RenderDetail(){
   var s=t1DetailState.search.toLowerCase().trim();var kws=s?s.split(/[\s,，]+/).filter(function(k){return k;}):[];
   var filtered=skuData.filter(function(d){
     if(t1DetailState.status&&d['物流状态']!==t1DetailState.status)return false;
-    if(t1DetailState.abnormal&&d['是否异常']!==t1DetailState.abnormal)return false;
+    if(!t1FilterAbnormal(d))return false;
     if(kws.length){var hay=(d['入库单号']+' '+d['赫特SKU']+' '+d['第三方SKU']+' '+d['产品名称']+' '+d['运单号']).toLowerCase();var m=false;for(var i=0;i<kws.length;i++){if(hay.indexOf(kws[i])>-1){m=true;break;}}if(!m)return false;}
     return true;
   });
@@ -1067,20 +1076,20 @@ function t1RenderDetail(){
   var sel=document.getElementById('t1-searchStatus');
   if(sel.options.length<=1){uniqueVals(skuData,'物流状态').forEach(function(st){var o=document.createElement('option');o.value=st;o.textContent=st;sel.appendChild(o);});}
   var colLabels={'入库单号':'第三方入库单号','提货时间':'提货','预计签收':'预计签收','预计上架':'预计上架','实际签收':'实际签收','实际上架':'实际上架'};
-  var cols=['入库单号','箱号','赫特SKU','产品名称','计划数量','上架数量','未上架数量','发货仓','目的仓','团队','物流状态','是否异常','提货时间','预计签收','预计上架','实际签收','实际上架','运单号'];
+  var cols=['入库单号','箱号','赫特SKU','产品名称','计划数量','上架数量','未上架数量','发货仓','目的仓','团队','物流状态','异常类型','提货时间','预计签收','预计上架','实际签收','实际上架','运单号'];
   document.querySelector('#t1-detailTable thead').innerHTML='<tr>'+cols.map(function(c){var ar=t1DetailState.sortField===c?(t1DetailState.sortDir==='asc'?'▲':'▼'):'';return '<th onclick="t1SortBy(\''+c+'\')">'+(colLabels[c]||c)+'<span class="arrow">'+ar+'</span></th>';}).join('')+'</tr>';
   var total=filtered.length,pages=Math.ceil(total/t1DetailState.pageSize)||1;if(t1DetailState.page>pages)t1DetailState.page=1;
   var start=(t1DetailState.page-1)*t1DetailState.pageSize,pd=filtered.slice(start,start+t1DetailState.pageSize);
-  document.querySelector('#t1-detailTable tbody').innerHTML=pd.map(function(d){var tm=getBoxTime(d['入库单号'],d['箱号'])||{};return '<tr><td>'+escapeHtml(d['入库单号']||'')+'</td><td>'+escapeHtml(d['箱号']||'')+'</td><td>'+escapeHtml(d['赫特SKU']||'')+'</td><td>'+escapeHtml(d['产品名称']||'')+'</td><td>'+escapeHtml(d['计划数量']??'')+'</td><td>'+escapeHtml(d['上架数量']??'')+'</td><td>'+(d['未上架数量']?'<span style="color:#dc2626">'+d['未上架数量']+'</span>':'0')+'</td><td>'+escapeHtml(d['发货仓']||'')+'</td><td>'+escapeHtml(d['目的仓']||'')+'</td><td>'+escapeHtml(d['团队']||'')+'</td><td>'+statusTag(d['物流状态'])+'</td><td>'+abnormalTag(d['是否异常'])+'</td><td>'+fmtT(d['提货时间'])+'</td><td>'+fmtT(tm['预计签收'])+'</td><td>'+fmtT(tm['预计上架'])+'</td><td>'+fmtT(tm['签收'])+'</td><td>'+fmtT(tm['上架'])+'</td><td>'+escapeHtml(d['运单号']||'')+'</td></tr>';}).join('')||'<tr><td colspan="18" class="empty">无匹配数据</td></tr>';
+  document.querySelector('#t1-detailTable tbody').innerHTML=pd.map(function(d){var tm=getBoxTime(d['入库单号'],d['箱号'])||{};return '<tr><td>'+escapeHtml(d['入库单号']||'')+'</td><td>'+escapeHtml(d['箱号']||'')+'</td><td>'+escapeHtml(d['赫特SKU']||'')+'</td><td>'+escapeHtml(d['产品名称']||'')+'</td><td>'+escapeHtml(d['计划数量']??'')+'</td><td>'+escapeHtml(d['上架数量']??'')+'</td><td>'+(d['未上架数量']?'<span style="color:#dc2626">'+d['未上架数量']+'</span>':'0')+'</td><td>'+escapeHtml(d['发货仓']||'')+'</td><td>'+escapeHtml(d['目的仓']||'')+'</td><td>'+escapeHtml(d['团队']||'')+'</td><td>'+statusTag(d['物流状态'])+'</td><td>'+anomalyTag(d)+'</td><td>'+fmtT(d['提货时间'])+'</td><td>'+fmtT(tm['预计签收'])+'</td><td>'+fmtT(tm['预计上架'])+'</td><td>'+fmtT(tm['签收'])+'</td><td>'+fmtT(tm['上架'])+'</td><td>'+escapeHtml(d['运单号']||'')+'</td></tr>';}).join('')||'<tr><td colspan="18" class="empty">无匹配数据</td></tr>';
   document.getElementById('t1-detailCount').textContent='共 '+total.toLocaleString()+' 条';
   document.getElementById('t1-pager').innerHTML='<button onclick="t1GoPage(1)" '+(t1DetailState.page<=1?'disabled':'')+'>首页</button><button onclick="t1GoPage('+(t1DetailState.page-1)+')" '+(t1DetailState.page<=1?'disabled':'')+'>上一页</button><span class="info">第 '+t1DetailState.page+' / '+pages+' 页</span><button onclick="t1GoPage('+(t1DetailState.page+1)+')" '+(t1DetailState.page>=pages?'disabled':'')+'>下一页</button><button onclick="t1GoPage('+pages+')" '+(t1DetailState.page>=pages?'disabled':'')+'>末页</button><span class="info">每页 '+t1DetailState.pageSize+' 条</span>';
 }
 function t1ExportDetail(){
   var s=t1DetailState.search.toLowerCase().trim();var kws=s?s.split(/[\s,，]+/).filter(function(k){return k;}):[];
-  var filtered=skuData.filter(function(d){if(t1DetailState.status&&d['物流状态']!==t1DetailState.status)return false;if(t1DetailState.abnormal&&d['是否异常']!==t1DetailState.abnormal)return false;if(kws.length){var hay=(d['入库单号']+' '+d['赫特SKU']+' '+d['产品名称']+' '+d['运单号']).toLowerCase();var m=false;for(var i=0;i<kws.length;i++){if(hay.indexOf(kws[i])>-1){m=true;break;}}if(!m)return false;}return true;});
-  var cols=['入库单号','箱号','赫特SKU','产品名称','计划数量','上架数量','未上架数量','发货仓','目的仓','团队','物流状态','是否异常','运单号'];
+  var filtered=skuData.filter(function(d){if(t1DetailState.status&&d['物流状态']!==t1DetailState.status)return false;if(!t1FilterAbnormal(d))return false;if(kws.length){var hay=(d['入库单号']+' '+d['赫特SKU']+' '+d['产品名称']+' '+d['运单号']).toLowerCase();var m=false;for(var i=0;i<kws.length;i++){if(hay.indexOf(kws[i])>-1){m=true;break;}}if(!m)return false;}return true;});
+  var cols=['入库单号','箱号','赫特SKU','产品名称','计划数量','上架数量','未上架数量','发货仓','目的仓','团队','物流状态','异常类型','运单号'];
   var csv='\uFEFF'+cols.join(',')+'\n';
-  filtered.forEach(function(d){csv+=cols.map(function(c){return '"'+String(d[c]||'').replace(/"/g,'""')+'"';}).join(',')+'\n';});
+  filtered.forEach(function(d){csv+=cols.map(function(c){var v=c==='异常类型'?anomalyText(d):(d[c]||'');return '"'+String(v).replace(/"/g,'""')+'"';}).join(',')+'\n';});
   var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='SKU明细_'+new Date().toLocaleDateString().replace(/\//g,'')+'.csv';a.click();
 }
 
