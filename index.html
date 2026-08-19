@@ -123,6 +123,7 @@
   .tag-orange { background:#fed7aa; color:#c2410c; }
   .tag-red { background:#fee2e2; color:#dc2626; }
   .tag-purple { background:#ede9fe; color:#6d28d9; }
+  .tag-yellow { background:#fef3c7; color:#b45309; }
   .pager { display:flex; gap:6px; align-items:center; justify-content:flex-end; margin-top:12px; font-size:13px; color:#6b7280; }
   .pager button { padding:5px 11px; border:1px solid #ddd6fe; background:#fff; border-radius:6px; cursor:pointer; color:#4c1d95; font-size:13px; }
   .pager button:hover:not(:disabled) { background:#f5f3ff; }
@@ -753,7 +754,7 @@
   </div>
 </div>
 
-<script src="all_data.js?v=20260819b"></script>
+<script src="all_data.js?v=20260819a"></script>
 <script>
 // ============ 数据 ============
 var BOX_FIELDS = RAW.box.fields;
@@ -1262,49 +1263,107 @@ function t2RenderMonthlyCross(){
   box.innerHTML=html;
 }
 
-var t2AnomalyState={page:1,pageSize:50,search:'',type:'',month:''};
+var t2AnomalyState={page:1,pageSize:50,search:'',type:'',month:'',sortField:'excQty',sortDir:'desc',rows:[],expanded:{}};
 function t2ShowAnomalyOrders(type){
-  t2AnomalyState.type=type;t2AnomalyState.page=1;t2AnomalyState.search='';t2AnomalyState.month='';
-  var data=t2BoxData.filter(t2FilterBox);
+  t2AnomalyState.type=type;t2AnomalyState.page=1;t2AnomalyState.search='';t2AnomalyState.month='';t2AnomalyState.sortField='excQty';t2AnomalyState.sortDir='desc';t2AnomalyState.expanded={};
   var sourceMap={total:'全部',domestic:'国内',bangladesh:'孟加拉'};
   var srcLbl=sourceMap[t2Source]?(sourceMap[t2Source]!=='全部'?'（'+sourceMap[t2Source]+'）':''):'';
-  var html='<div style="margin-bottom:14px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><input type="text" id="t2-anomalySearch" placeholder="搜索 入库单号/箱号/物流商/目的仓..." oninput="t2AnomalyState.search=this.value;t2AnomalyState.page=1;t2RenderAnomalyTable()" style="padding:7px 12px;border:1px solid #ddd6fe;border-radius:8px;font-size:13px;width:280px;outline:none"><select id="t2-anomalyMonth" onchange="t2AnomalyState.month=this.value;t2AnomalyState.page=1;t2RenderAnomalyTable()" style="padding:7px 10px;border:1px solid #ddd6fe;border-radius:8px;font-size:13px;background:#faf8ff;color:#4c1d95"></select><span style="margin-left:auto;font-size:13px;color:#6b7280" id="t2-anomalyCount"></span></div><div id="t2-anomalyBody"></div><div class="pager" id="t2-anomalyPager"></div></div>';
+  var html='<div style="margin-bottom:14px">'+
+    '<div id="t2-anomalyKpi" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"></div>'+
+    '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'+
+      '<input type="text" id="t2-anomalySearch" placeholder="搜索 入库单号/物流商..." oninput="t2AnomalyState.search=this.value;t2AnomalyState.page=1;t2RenderAnomalyTable()" style="padding:7px 12px;border:1px solid #ddd6fe;border-radius:8px;font-size:13px;width:280px;outline:none">'+
+      '<select id="t2-anomalyMonth" onchange="t2AnomalyState.month=this.value;t2AnomalyState.page=1;t2RenderAnomalyTable()" style="padding:7px 10px;border:1px solid #ddd6fe;border-radius:8px;font-size:13px;background:#faf8ff;color:#4c1d95"></select>'+
+      '<span style="margin-left:auto;font-size:13px;color:#6b7280" id="t2-anomalyCount"></span>'+
+    '</div>'+
+    '<div id="t2-anomalyMonthBar" style="margin-bottom:12px"></div>'+
+    '<div id="t2-anomalyBody"></div>'+
+    '<div class="pager" id="t2-anomalyPager"></div>'+
+  '</div>';
   openModal(type+srcLbl+' - 异常订单详情',html);
-  var months={};data.forEach(function(d){var m=(d['收件年份']||'')+'-'+(d['收件月份']||'');if(m&&m!=='-')months[m]=1;});
-  var sel=document.getElementById('t2-anomalyMonth');
-  sel.innerHTML='<option value="">全部月份</option>'+Object.keys(months).sort().map(function(m){return '<option value="'+m+'">'+m+'</option>';}).join('');
   t2RenderAnomalyTable();
 }
 function t2RenderAnomalyTable(){
   var data=t2BoxData.filter(t2FilterBox);
-  var filtered=data.filter(function(d){
-    if(t2AnomalyState.type==='超时异常'&&!isExc(d))return false;
-    if(t2AnomalyState.type==='查验异常'&&!isChk(d))return false;
-    if(t2AnomalyState.month){var m=(d['收件年份']||'')+'-'+(d['收件月份']||'');if(m!==t2AnomalyState.month)return false;}
-    if(t2AnomalyState.search){var s=t2AnomalyState.search.toLowerCase();var hay=(d['入库单号']+' '+d['箱号']+' '+d['物流商']+' '+d['目的仓库']+' '+d['运输类型']).toLowerCase();if(hay.indexOf(s)===-1)return false;}
-    return true;
+  var groups={};
+  data.forEach(function(d){
+    var inNo=String(d['入库单号']||'');if(!inNo||inNo==='nan')return;
+    if(!groups[inNo])groups[inNo]={inNo:inNo,carrier:d['物流商']||'',pickupDate:d['提货时间']||'',month:(d['收件年份']||'')+'-'+(d['收件月份']||''),totalQty:0,excQty:0,boxes:[],anomalyTypes:{},delayDescs:{}};
+    var g=groups[inNo];var q=qtyOf(d);g.totalQty+=q;g.boxes.push(d);
+    var inScope=(t2AnomalyState.type==='超时异常'&&isExc(d))||(t2AnomalyState.type==='查验异常'&&isChk(d));
+    if(inScope){
+      g.excQty+=q;
+      var lg=String(d['物流异常']||'').trim(),up=String(d['上架异常']||'').trim();
+      if(lg&&lg!=='无异常'&&lg!=='nan')g.anomalyTypes['物流:'+lg]=(g.anomalyTypes['物流:'+lg]||0)+q;
+      if(up&&up!=='无异常'&&up!=='nan')g.anomalyTypes['上架:'+up]=(g.anomalyTypes['上架:'+up]||0)+q;
+      if(isChk(d))g.anomalyTypes['查验']=(g.anomalyTypes['查验']||0)+q;
+      if(t2AnomalyState.type==='超时异常'&&!lg&&!up)g.anomalyTypes['超时']=(g.anomalyTypes['超时']||0)+q;
+    }
+    var desc=String(d['延迟说明']||'').trim();if(desc&&desc!=='nan')g.delayDescs[desc]=1;
   });
-  var mg={};filtered.forEach(function(d){var m=(d['收件年份']||'')+'-'+(d['收件月份']||'');if(m&&m!=='-')mg[m]=(mg[m]||0)+1;});
-  var months=Object.keys(mg).sort();
-  var statsHtml='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:10px;background:#faf8ff;border-radius:8px">';
-  if(months.length){statsHtml+='<div style="font-size:12px;color:#6b7280;margin-right:8px;line-height:24px">月度分布:</div>';months.forEach(function(m){statsHtml+='<span style="padding:3px 10px;background:#fff;border:1px solid #ddd6fe;border-radius:12px;font-size:12px;color:#4c1d95">'+escapeHtml(m)+': <b>'+mg[m]+'</b></span>';});}else{statsHtml+='<span style="font-size:12px;color:#9ca3af">暂无数据</span>';}
-  statsHtml+='</div>';
-  var total=filtered.length,pages=Math.ceil(total/t2AnomalyState.pageSize)||1;
+  var rows=Object.values(groups).filter(function(g){return g.excQty>0;});
+  if(t2AnomalyState.month){rows=rows.filter(function(g){return g.month===t2AnomalyState.month;});}
+  if(t2AnomalyState.search){var s=t2AnomalyState.search.toLowerCase();rows=rows.filter(function(g){return (g.inNo+' '+g.carrier).toLowerCase().indexOf(s)>-1;});}
+  var sf=t2AnomalyState.sortField,sd=t2AnomalyState.sortDir==='asc'?1:-1;
+  rows.sort(function(a,b){var av=a[sf],bv=b[sf];if(typeof av==='string'||typeof bv==='string'){return (av||'').localeCompare(bv||'')*sd;}return ((av||0)-(bv||0))*sd;});
+  t2AnomalyState.rows=rows;
+  var totalExcQty=rows.reduce(function(s,g){return s+g.excQty;},0);
+  var totalQty=rows.reduce(function(s,g){return s+g.totalQty;},0);
+  var carrierStats={};rows.forEach(function(g){carrierStats[g.carrier]=(carrierStats[g.carrier]||0)+g.excQty;});
+  var topCarrier=Object.keys(carrierStats).sort(function(a,b){return carrierStats[b]-carrierStats[a];})[0]||'-';
+  var topCarrierPct=topCarrier!=='-'&&totalExcQty?Math.round(carrierStats[topCarrier]/totalExcQty*100):0;
+  var monthStats={};rows.forEach(function(g){if(g.month&&g.month!=='-')monthStats[g.month]=(monthStats[g.month]||0)+g.excQty;});
+  var topMonth=Object.keys(monthStats).sort(function(a,b){return monthStats[b]-monthStats[a];})[0]||'-';
+  var kpiCards=[
+    {l:'异常总件数',v:Math.round(totalExcQty).toLocaleString(),s:'共 '+rows.length+' 个异常单号',c:'up'},
+    {l:'异常单号数',v:rows.length.toLocaleString(),s:'占总件数 '+Math.round(totalQty),c:'ok'},
+    {l:'高发物流商',v:topCarrier,s:topCarrier!=='-'?'占 '+topCarrierPct+'% ('+Math.round(carrierStats[topCarrier])+' 件)':'-',c:'ok'},
+    {l:'高发月份',v:topMonth,s:topMonth!=='-'?Math.round(monthStats[topMonth])+' 件':'-',c:'ok'}
+  ];
+  document.getElementById('t2-anomalyKpi').innerHTML=kpiCards.map(function(c){return '<div class="kpi" style="flex:1;min-width:200px"><div class="k-label">'+c.l+'</div><div class="k-value" style="font-size:20px">'+escapeHtml(String(c.v))+'</div><div class="k-sub"><span class="'+c.c+'">'+c.s+'</span></div></div>';}).join('');
+  var months=Object.keys(monthStats).sort();
+  var monthBarHtml='<div style="font-size:12px;color:#6b7280;margin-right:8px;line-height:24px">月度分布(点击筛选):</div>';
+  if(months.length){months.forEach(function(m){var active=t2AnomalyState.month===m;monthBarHtml+='<span onclick="t2AnomalyToggleMonth(\''+escapeAttr(m)+'\')" style="padding:3px 10px;background:'+(active?'#7c3aed':'#fff')+';color:'+(active?'#fff':'#4c1d95')+';border:1px solid #ddd6fe;border-radius:12px;font-size:12px;cursor:pointer;margin:2px">'+escapeHtml(m)+': <b>'+Math.round(monthStats[m])+'</b></span>';});}else{monthBarHtml+='<span style="font-size:12px;color:#9ca3af">暂无数据</span>';}
+  document.getElementById('t2-anomalyMonthBar').innerHTML='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:10px;background:#faf8ff;border-radius:8px">'+monthBarHtml+'</div>';
+  var sel=document.getElementById('t2-anomalyMonth');
+  sel.innerHTML='<option value="">全部月份</option>'+months.map(function(m){return '<option value="'+m+'"'+(t2AnomalyState.month===m?' selected':'')+'>'+m+'</option>';}).join('');
+  var total=rows.length,pages=Math.ceil(total/t2AnomalyState.pageSize)||1;
   if(t2AnomalyState.page>pages)t2AnomalyState.page=1;
-  var start=(t2AnomalyState.page-1)*t2AnomalyState.pageSize,pd=filtered.slice(start,start+t2AnomalyState.pageSize);
-  var cols=['入库单号','箱号','物流商','运输类型','时效要求','提货时间','目的仓','团队','异常类型','延迟说明'];
-  var tableHtml='<div style="overflow-x:auto;max-height:420px"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#f5f3ff;position:sticky;top:0">'+cols.map(function(c){return '<th style="padding:8px;text-align:left;color:#4c1d95;white-space:nowrap">'+c+'</th>';}).join('')+'</tr></thead><tbody>';
-  tableHtml+=pd.map(function(d){
-    var atype=t2AnomalyState.type==='超时异常'?(d['物流异常']||'超时'):'查验异常';
-    var delayDesc=d['延迟说明']||'';
-    return '<tr style="border-bottom:1px solid #f3f0ff;cursor:pointer" onclick="closeModal();switchTab(\'tab1\');setTimeout(function(){document.getElementById(\'t1-lookupInput\').value=\''+escapeAttr(d['入库单号'])+'\';t1DoLookup();},100)"><td style="padding:6px 8px">'+escapeHtml(d['入库单号']||'')+'</td><td style="padding:6px 8px">'+escapeHtml(d['箱号']||'')+'</td><td style="padding:6px 8px;font-weight:600;color:#4c1d95">'+escapeHtml(d['物流商']||'')+'</td><td style="padding:6px 8px">'+escapeHtml(d['运输类型']||'')+'</td><td style="padding:6px 8px">'+escapeHtml(d['时效要求']||'')+'</td><td style="padding:6px 8px">'+fmtT(d['提货时间'])+'</td><td style="padding:6px 8px">'+escapeHtml(d['目的仓库']||'')+'</td><td style="padding:6px 8px">'+escapeHtml(d['团队']||'')+'</td><td style="padding:6px 8px"><span class="tag tag-red">'+escapeHtml(atype)+'</span></td><td style="padding:6px 8px;color:#c2410c;max-width:200px;word-break:break-all">'+escapeHtml(delayDesc)+'</td></tr>';
-  }).join('')||'<tr><td colspan="10" class="empty">无匹配数据</td></tr>';
-  tableHtml+='</tbody></table></div>';
-  document.getElementById('t2-anomalyBody').innerHTML=statsHtml+tableHtml;
-  document.getElementById('t2-anomalyCount').textContent='共 '+total+' 条';
+  var start=(t2AnomalyState.page-1)*t2AnomalyState.pageSize,pd=rows.slice(start,start+t2AnomalyState.pageSize);
+  var cols=[{k:'inNo',l:'入库单号',sort:true},{k:'carrier',l:'物流商',sort:true},{k:'pickupDate',l:'提货时间',sort:true},{k:'totalQty',l:'件数',sort:true},{k:'excQty',l:'异常件数',sort:true},{k:'anomalyTypes',l:'异常类型',sort:false},{k:'delayDescs',l:'延迟说明',sort:false},{k:'_op',l:'操作',sort:false}];
+  var sortMark=function(k){if(t2AnomalyState.sortField!==k)return'';return t2AnomalyState.sortDir==='asc'?'▲':'▼';};
+  var theadHtml='<tr style="background:#f5f3ff;position:sticky;top:0">'+cols.map(function(c){var st=c.sort?';cursor:pointer':'';var clk=c.sort?' onclick="t2AnomalySortBy(\''+c.k+'\')"':'';return '<th style="padding:8px;text-align:left;color:#4c1d95;white-space:nowrap'+st+'"'+clk+'>'+c.l+'<span class="arrow" style="margin-left:4px">'+sortMark(c.k)+'</span></th>';}).join('')+'</tr>';
+  var tbodyHtml=pd.map(function(g,i){
+    var globalIdx=start+i;
+    var atHtml=(function(){var arr=Object.keys(g.anomalyTypes).map(function(k){return {k:k,v:g.anomalyTypes[k]};});arr.sort(function(a,b){return b.v-a.v;});return arr.map(function(o){var cls=o.k.indexOf('物流')===0?'tag-red':(o.k.indexOf('上架')===0?'tag-orange':'tag-yellow');return '<span class="tag '+cls+'">'+escapeHtml(o.k)+'</span>';}).join(' ')||'-';})();
+    var delayHtml=(function(){var arr=Object.keys(g.delayDescs);if(!arr.length)return '-';var text=arr.join(' | ');if(text.length>100){return '<span title="'+escapeAttr(arr.join('\n---\n'))+'" style="cursor:help;color:#c2410c;max-width:260px;display:inline-block;word-break:break-all">'+escapeHtml(text.slice(0,100))+'...</span>';}return '<span style="color:#c2410c;max-width:260px;display:inline-block;word-break:break-all">'+escapeHtml(text)+'</span>';})();
+    var ratio=g.totalQty?Math.round(g.excQty/g.totalQty*100):0;
+    var isExp=t2AnomalyState.expanded[globalIdx];
+    return '<tr id="anomaly-row-'+globalIdx+'" style="border-bottom:1px solid #f3f0ff"><td style="padding:6px 8px;font-weight:600;color:#4c1d95">'+escapeHtml(g.inNo)+'</td><td style="padding:6px 8px">'+escapeHtml(g.carrier)+'</td><td style="padding:6px 8px">'+fmtT(g.pickupDate)+'</td><td style="padding:6px 8px" title="'+g.boxes.length+'箱共'+g.totalQty+'件">'+g.totalQty+'</td><td style="padding:6px 8px"><span style="color:#dc2626;font-weight:600">'+g.excQty+'</span><span style="color:#9ca3af"> / '+g.totalQty+' ('+ratio+'%)</span></td><td style="padding:6px 8px">'+atHtml+'</td><td style="padding:6px 8px">'+delayHtml+'</td><td style="padding:6px 8px;text-align:center"><button onclick="t2AnomalyToggleExpand('+globalIdx+')" style="border:1px solid #ddd6fe;background:'+(isExp?'#7c3aed':'#fff')+';color:'+(isExp?'#fff':'#7c3aed')+';border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer">'+(isExp?'收起 ▲':'展开 '+g.boxes.length+' 箱 ▼')+'</button></td></tr><tr id="anomaly-sub-'+globalIdx+'" style="display:'+(isExp?'':'none')+'"><td colspan="8" style="padding:0;border-bottom:1px solid #ddd6fe"></td></tr>';
+  }).join('')||'<tr><td colspan="8" class="empty">无匹配数据</td></tr>';
+  document.getElementById('t2-anomalyBody').innerHTML='<div style="overflow-x:auto;max-height:520px"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead>'+theadHtml+'</thead><tbody>'+tbodyHtml+'</tbody></table></div>';
+  document.getElementById('t2-anomalyCount').textContent='共 '+total+' 个异常单号';
   document.getElementById('t2-anomalyPager').innerHTML='<button onclick="t2AnomalyGoPage(1)" '+(t2AnomalyState.page<=1?'disabled':'')+'>首页</button><button onclick="t2AnomalyGoPage('+(t2AnomalyState.page-1)+')" '+(t2AnomalyState.page<=1?'disabled':'')+'>上一页</button><span class="info">第 '+t2AnomalyState.page+' / '+pages+' 页</span><button onclick="t2AnomalyGoPage('+(t2AnomalyState.page+1)+')" '+(t2AnomalyState.page>=pages?'disabled':'')+'>下一页</button><button onclick="t2AnomalyGoPage('+pages+')" '+(t2AnomalyState.page>=pages?'disabled':'')+'>末页</button><span class="info">每页</span><select onchange="t2AnomalyState.pageSize=parseInt(this.value);t2AnomalyState.page=1;t2RenderAnomalyTable()" style="padding:4px 8px;border:1px solid #ddd6fe;border-radius:4px;font-size:12px"><option value="30"'+(t2AnomalyState.pageSize===30?' selected':'')+'>30</option><option value="50"'+(t2AnomalyState.pageSize===50?' selected':'')+'>50</option><option value="100"'+(t2AnomalyState.pageSize===100?' selected':'')+'>100</option></select><span class="info">条</span>';
+  for(var k in t2AnomalyState.expanded){if(t2AnomalyState.expanded[k])t2AnomalyFillSub(parseInt(k));}
+}
+function t2AnomalySortBy(f){
+  if(t2AnomalyState.sortField===f){t2AnomalyState.sortDir=t2AnomalyState.sortDir==='asc'?'desc':'asc';}else{t2AnomalyState.sortField=f;t2AnomalyState.sortDir=(f==='excQty'||f==='totalQty')?'desc':'asc';}
+  t2RenderAnomalyTable();
 }
 function t2AnomalyGoPage(p){t2AnomalyState.page=p;t2RenderAnomalyTable();}
+function t2AnomalyToggleMonth(m){t2AnomalyState.month=(t2AnomalyState.month===m)?'':m;t2AnomalyState.page=1;t2RenderAnomalyTable();}
+function t2AnomalyToggleExpand(idx){
+  t2AnomalyState.expanded[idx]=!t2AnomalyState.expanded[idx];
+  var sub=document.getElementById('anomaly-sub-'+idx);
+  var btn=document.querySelector('#anomaly-row-'+idx+' button');
+  if(t2AnomalyState.expanded[idx]){if(sub)sub.style.display='';t2AnomalyFillSub(idx);if(btn)btn.style.cssText='border:1px solid #ddd6fe;background:#7c3aed;color:#fff;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer';if(btn)btn.textContent='收起 ▲';}
+  else{if(sub)sub.style.display='none';if(btn)btn.style.cssText='border:1px solid #ddd6fe;background:#fff;color:#7c3aed;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer';if(btn)btn.textContent='展开 ▼';}
+}
+function t2AnomalyFillSub(idx){
+  var sub=document.getElementById('anomaly-sub-'+idx);if(!sub)return;var g=t2AnomalyState.rows[idx];if(!g)return;
+  var cols=['箱号','物流商','运输类型','时效要求','提货时间','目的仓','计划数量','物流异常','上架异常','查验','延迟说明'];
+  var html='<div style="padding:10px;background:#faf8ff"><div style="font-size:12px;color:#6b7280;margin-bottom:8px">'+escapeHtml(g.inNo)+' 共 '+g.boxes.length+' 箱 / '+g.totalQty+' 件 · 异常 '+g.excQty+' 件 · <a href="javascript:void(0)" onclick="closeModal();switchTab(\'tab1\');setTimeout(function(){var inp=document.getElementById(\'t1-lookupInput\');if(inp){inp.value=\''+escapeAttr(g.inNo)+'\';t1DoLookup();}},100)" style="color:#7c3aed;text-decoration:underline">在Tab1查看时间轴 →</a></div><div style="overflow-x:auto;max-height:280px"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#ede9fe;position:sticky;top:0">'+cols.map(function(c){return '<th style="padding:6px;text-align:left;color:#4c1d95;white-space:nowrap">'+c+'</th>';}).join('')+'</tr></thead><tbody>'+g.boxes.map(function(d){var lg=String(d['物流异常']||'').trim(),up=String(d['上架异常']||'').trim();return '<tr style="border-bottom:1px solid #ede9fe"><td style="padding:5px 8px">'+escapeHtml(d['箱号']||'')+'</td><td style="padding:5px 8px">'+escapeHtml(d['物流商']||'')+'</td><td style="padding:5px 8px">'+escapeHtml(d['运输类型']||'')+'</td><td style="padding:5px 8px">'+escapeHtml(d['时效要求']||'')+'</td><td style="padding:5px 8px">'+fmtT(d['提货时间'])+'</td><td style="padding:5px 8px">'+escapeHtml(d['目的仓库']||'')+'</td><td style="padding:5px 8px">'+qtyOf(d)+'</td><td style="padding:5px 8px">'+(lg&&lg!=='无异常'&&lg!=='nan'?'<span class="tag tag-red">'+escapeHtml(lg)+'</span>':'-')+'</td><td style="padding:5px 8px">'+(up&&up!=='无异常'&&up!=='nan'?'<span class="tag tag-orange">'+escapeHtml(up)+'</span>':'-')+'</td><td style="padding:5px 8px">'+(isChk(d)?'<span class="tag tag-yellow">查验</span>':'-')+'</td><td style="padding:5px 8px;color:#c2410c;max-width:220px;word-break:break-all">'+escapeHtml(d['延迟说明']||'')+'</td></tr>';}).join('')+'</tbody></table></div></div>';
+  sub.querySelector('td').innerHTML=html;
+}
 
 function t2OpenChartModal(id,title){
   var src=allCharts[id];
