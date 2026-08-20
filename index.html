@@ -754,7 +754,7 @@
   </div>
 </div>
 
-<script src="all_data.js?v=20260820a"></script>
+<script src="all_data.js?v=20260820b"></script>
 <script>
 // ============ 数据 ============
 var BOX_FIELDS = RAW.box.fields;
@@ -2062,7 +2062,7 @@ function t3SwitchBoxView(viewType){
   }
   if(viewType==='cost'){t3RenderBoxCost();}
 }
-// ============ Tab3 盒型费用分析（对齐旧版完整逻辑）============
+// ============ Tab3 盒型费用分析（海运拆国内/孟加拉 + 智能隐藏0件数列）============
 function t3RenderBoxCost(){
   var costData=RAW.boxCostData||[];
   var shortMap=RAW.boxTypeShortMap||{};
@@ -2083,10 +2083,17 @@ function t3RenderBoxCost(){
     if(t3Filters.dateEnd&&r['提货日期']>t3Filters.dateEnd)return false;
     return true;
   });
-  // 按盒型×运输类型统计件数（对齐旧版：空运拆分保税仓/直发，快递拆分168UPS/168aramex/普通）
+  // 海运按目的地分类拆分（国内/孟加拉）
+  function getSeaTypeKey(r){
+    var destCat=r['目的地分类']||'';
+    return destCat.indexOf('孟加拉')!==-1?'海运孟加拉':'海运国内';
+  }
+  // 统计各运输类型总件数（用于智能隐藏0件数列）
+  var totalByType={空运保税仓:0,空运直发:0,海运国内:0,海运孟加拉:0,快递168UPS:0,快递168aramex:0,快递普通:0};
+  // 按盒型×运输类型统计件数（空运拆分保税仓/直发, 海运拆分国内/孟加拉, 快递拆分168UPS/168aramex/普通）
   var boxTransportPieces={};
   filteredBR.forEach(function(r){
-    if(!boxTransportPieces[r['盒型']])boxTransportPieces[r['盒型']]={空运保税仓:0,空运直发:0,海运:0,快递168UPS:0,快递168aramex:0,快递普通:0};
+    if(!boxTransportPieces[r['盒型']])boxTransportPieces[r['盒型']]={空运保税仓:0,空运直发:0,海运国内:0,海运孟加拉:0,快递168UPS:0,快递168aramex:0,快递普通:0};
     var typeKey=r['运输类型'];
     if(typeKey==='空运'){
       var channel=r['物流渠道']||'';
@@ -2097,18 +2104,38 @@ function t3RenderBoxCost(){
       if(origin==='168'&&provider.indexOf('ups')!==-1)typeKey='快递168UPS';
       else if(origin==='168'&&provider.indexOf('aramex')!==-1)typeKey='快递168aramex';
       else typeKey='快递普通';
+    }else if(typeKey==='海运'){
+      typeKey=getSeaTypeKey(r);
     }
     if(boxTransportPieces[r['盒型']][typeKey]!==undefined)boxTransportPieces[r['盒型']][typeKey]+=t3Num(r['件数']);
+    if(totalByType[typeKey]!==undefined)totalByType[typeKey]+=t3Num(r['件数']);
   });
+  // 智能隐藏：筛选后件数=0的均价列隐藏（若全为0则全显示）
+  var hasAnyPieces=false;
+  for(var k in totalByType){if(totalByType[k]>0){hasAnyPieces=true;break;}}
+  var showCols={
+    空运保税仓: !hasAnyPieces||totalByType.空运保税仓>0,
+    空运直发: !hasAnyPieces||totalByType.空运直发>0,
+    海运国内: !hasAnyPieces||totalByType.海运国内>0,
+    海运孟加拉: !hasAnyPieces||totalByType.海运孟加拉>0,
+    快递168UPS: !hasAnyPieces||totalByType.快递168UPS>0,
+    快递168aramex: !hasAnyPieces||totalByType.快递168aramex>0,
+    快递普通: !hasAnyPieces||totalByType.快递普通>0
+  };
+  // 各组列数
+  var airCols=(showCols.空运保税仓?1:0)+(showCols.空运直发?1:0);
+  var seaCols=(showCols.海运国内?1:0)+(showCols.海运孟加拉?1:0);
+  var expressCols=(showCols.快递168UPS?1:0)+(showCols.快递168aramex?1:0)+(showCols.快递普通?1:0);
   // 计算每个盒型的加权均价
   var rows=costData.map(function(box){
-    var pieces=boxTransportPieces[box['盒型']]||{空运保税仓:0,空运直发:0,海运:0,快递168UPS:0,快递168aramex:0,快递普通:0};
-    var totalPieces=pieces.空运保税仓+pieces.空运直发+pieces.海运+pieces.快递168UPS+pieces.快递168aramex+pieces.快递普通;
+    var pieces=boxTransportPieces[box['盒型']]||{空运保税仓:0,空运直发:0,海运国内:0,海运孟加拉:0,快递168UPS:0,快递168aramex:0,快递普通:0};
+    var totalPieces=pieces.空运保税仓+pieces.空运直发+pieces.海运国内+pieces.海运孟加拉+pieces.快递168UPS+pieces.快递168aramex+pieces.快递普通;
     var weightedAvg=0;
     if(totalPieces>0){
       if(box['空运保税仓均价']!==null)weightedAvg+=box['空运保税仓均价']*(pieces.空运保税仓/totalPieces);
       if(box['空运直发均价']!==null)weightedAvg+=box['空运直发均价']*(pieces.空运直发/totalPieces);
-      if(box['海运均价']!==null)weightedAvg+=box['海运均价']*(pieces.海运/totalPieces);
+      if(box['海运国内均价']!==null)weightedAvg+=box['海运国内均价']*(pieces.海运国内/totalPieces);
+      if(box['海运孟加拉均价']!==null)weightedAvg+=box['海运孟加拉均价']*(pieces.海运孟加拉/totalPieces);
       if(box['快递168UPS均价']!==null)weightedAvg+=box['快递168UPS均价']*(pieces.快递168UPS/totalPieces);
       if(box['快递168aramex均价']!==null)weightedAvg+=box['快递168aramex均价']*(pieces.快递168aramex/totalPieces);
       if(box['快递普通均价']!==null)weightedAvg+=box['快递普通均价']*(pieces.快递普通/totalPieces);
@@ -2118,21 +2145,24 @@ function t3RenderBoxCost(){
   // 渲染两行表头+表体
   function fmtVal(v){return v!==null&&v!==undefined?'¥'+t3Fmt(v,2):'<span style="color:#ccc">-</span>';}
   var html='<div style="overflow-x:auto"><table class="data-table" style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap">';
+  // 第一行表头（按组colspan动态）
   html+='<thead><tr style="background:#f5f3ff">';
   html+='<th rowspan="2" style="padding:8px 10px;color:#4c1d95">盒型</th>';
   html+='<th rowspan="2" style="padding:8px 10px;color:#4c1d95">尺寸</th>';
   html+='<th rowspan="2" style="padding:8px 10px;color:#4c1d95">计费重(KG)</th>';
   html+='<th rowspan="2" style="padding:8px 10px;color:#4c1d95">每箱件数</th>';
-  html+='<th colspan="2" style="text-align:center;background:#e3f2fd;color:#1565c0;padding:6px 10px">空运(元/件)</th>';
-  html+='<th rowspan="2" style="padding:8px 10px;color:#4c1d95">海运均价(元/件)</th>';
-  html+='<th colspan="3" style="text-align:center;background:#ffebee;color:#c62828;padding:6px 10px">快递(元/件)</th>';
+  if(airCols>0)html+='<th colspan="'+airCols+'" style="text-align:center;background:#e3f2fd;color:#1565c0;padding:6px 10px">空运(元/件)</th>';
+  if(seaCols>0)html+='<th colspan="'+seaCols+'" style="text-align:center;background:#e8f5e9;color:#2E7D32;padding:6px 10px">海运(元/件)</th>';
+  if(expressCols>0)html+='<th colspan="'+expressCols+'" style="text-align:center;background:#ffebee;color:#c62828;padding:6px 10px">快递(元/件)</th>';
   html+='<th rowspan="2" style="padding:8px 10px;color:#5b21b6;font-weight:700">加权均价(元/件)</th>';
   html+='</tr><tr style="background:#f5f3ff">';
-  html+='<th style="background:#e3f2fd;color:#1565c0;padding:6px 10px">保税仓</th>';
-  html+='<th style="background:#e3f2fd;color:#1565c0;padding:6px 10px">直发</th>';
-  html+='<th style="background:#ffebee;color:#c62828;padding:6px 10px">168UPS</th>';
-  html+='<th style="background:#ffebee;color:#c62828;padding:6px 10px">168aramex</th>';
-  html+='<th style="background:#ffebee;color:#c62828;padding:6px 10px">普通</th>';
+  if(showCols.空运保税仓)html+='<th style="background:#e3f2fd;color:#1565c0;padding:6px 10px">保税仓</th>';
+  if(showCols.空运直发)html+='<th style="background:#e3f2fd;color:#1565c0;padding:6px 10px">直发</th>';
+  if(showCols.海运国内)html+='<th style="background:#e8f5e9;color:#2E7D32;padding:6px 10px">国内</th>';
+  if(showCols.海运孟加拉)html+='<th style="background:#e8f5e9;color:#2E7D32;padding:6px 10px">孟加拉</th>';
+  if(showCols.快递168UPS)html+='<th style="background:#ffebee;color:#c62828;padding:6px 10px">168UPS</th>';
+  if(showCols.快递168aramex)html+='<th style="background:#ffebee;color:#c62828;padding:6px 10px">168aramex</th>';
+  if(showCols.快递普通)html+='<th style="background:#ffebee;color:#c62828;padding:6px 10px">普通</th>';
   html+='</tr></thead><tbody>';
   rows.forEach(function(d,i){
     var bg=i%2?'#faf9fc':'#fff';
@@ -2142,23 +2172,25 @@ function t3RenderBoxCost(){
     html+='<td style="padding:6px 10px">'+escapeHtml(d.box['尺寸'])+'</td>';
     html+='<td style="padding:6px 10px">'+t3Fmt(d.box['计费重'],4)+'</td>';
     html+='<td style="padding:6px 10px">'+d.box['每箱件数']+'</td>';
-    html+='<td style="padding:6px 10px;color:#1565c0;font-weight:600">'+fmtVal(d.box['空运保税仓均价'])+'</td>';
-    html+='<td style="padding:6px 10px;color:#1565c0;font-weight:600">'+fmtVal(d.box['空运直发均价'])+'</td>';
-    html+='<td style="padding:6px 10px">'+fmtVal(d.box['海运均价'])+'</td>';
-    html+='<td style="padding:6px 10px;color:#c62828;font-weight:600">'+fmtVal(d.box['快递168UPS均价'])+'</td>';
-    html+='<td style="padding:6px 10px;color:#c62828;font-weight:600">'+fmtVal(d.box['快递168aramex均价'])+'</td>';
-    html+='<td style="padding:6px 10px;color:#c62828;font-weight:600">'+fmtVal(d.box['快递普通均价'])+'</td>';
+    if(showCols.空运保税仓)html+='<td style="padding:6px 10px;color:#1565c0;font-weight:600">'+fmtVal(d.box['空运保税仓均价'])+'</td>';
+    if(showCols.空运直发)html+='<td style="padding:6px 10px;color:#1565c0;font-weight:600">'+fmtVal(d.box['空运直发均价'])+'</td>';
+    if(showCols.海运国内)html+='<td style="padding:6px 10px;color:#2E7D32;font-weight:600">'+fmtVal(d.box['海运国内均价'])+'</td>';
+    if(showCols.海运孟加拉)html+='<td style="padding:6px 10px;color:#2E7D32;font-weight:600">'+fmtVal(d.box['海运孟加拉均价'])+'</td>';
+    if(showCols.快递168UPS)html+='<td style="padding:6px 10px;color:#c62828;font-weight:600">'+fmtVal(d.box['快递168UPS均价'])+'</td>';
+    if(showCols.快递168aramex)html+='<td style="padding:6px 10px;color:#c62828;font-weight:600">'+fmtVal(d.box['快递168aramex均价'])+'</td>';
+    if(showCols.快递普通)html+='<td style="padding:6px 10px;color:#c62828;font-weight:600">'+fmtVal(d.box['快递普通均价'])+'</td>';
     html+='<td style="padding:6px 10px;color:#6a1b9a;font-weight:bold">'+weightedStr+'</td>';
     html+='</tr>';
   });
   html+='</tbody>';
-  // 底部汇总行
-  var totalAB=0,totalAD=0,totalS=0,totalEU=0,totalEA=0,totalEN=0;
-  var sumAB=0,sumAD=0,sumS=0,sumEU=0,sumEA=0,sumEN=0;
+  // 底部汇总行（按显示列输出）
+  var totalAB=0,totalAD=0,totalSD=0,totalSB=0,totalEU=0,totalEA=0,totalEN=0;
+  var sumAB=0,sumAD=0,sumSD=0,sumSB=0,sumEU=0,sumEA=0,sumEN=0;
   rows.forEach(function(d){
     if(d.box['空运保税仓均价']!==null&&d.pieces.空运保税仓>0){sumAB+=d.box['空运保税仓均价']*d.pieces.空运保税仓;totalAB+=d.pieces.空运保税仓;}
     if(d.box['空运直发均价']!==null&&d.pieces.空运直发>0){sumAD+=d.box['空运直发均价']*d.pieces.空运直发;totalAD+=d.pieces.空运直发;}
-    if(d.box['海运均价']!==null&&d.pieces.海运>0){sumS+=d.box['海运均价']*d.pieces.海运;totalS+=d.pieces.海运;}
+    if(d.box['海运国内均价']!==null&&d.pieces.海运国内>0){sumSD+=d.box['海运国内均价']*d.pieces.海运国内;totalSD+=d.pieces.海运国内;}
+    if(d.box['海运孟加拉均价']!==null&&d.pieces.海运孟加拉>0){sumSB+=d.box['海运孟加拉均价']*d.pieces.海运孟加拉;totalSB+=d.pieces.海运孟加拉;}
     if(d.box['快递168UPS均价']!==null&&d.pieces.快递168UPS>0){sumEU+=d.box['快递168UPS均价']*d.pieces.快递168UPS;totalEU+=d.pieces.快递168UPS;}
     if(d.box['快递168aramex均价']!==null&&d.pieces.快递168aramex>0){sumEA+=d.box['快递168aramex均价']*d.pieces.快递168aramex;totalEA+=d.pieces.快递168aramex;}
     if(d.box['快递普通均价']!==null&&d.pieces.快递普通>0){sumEN+=d.box['快递普通均价']*d.pieces.快递普通;totalEN+=d.pieces.快递普通;}
@@ -2166,12 +2198,13 @@ function t3RenderBoxCost(){
   var r2=function(s,t){return t>0?'¥'+t3Fmt(s/t,2):'-';};
   html+='<tfoot style="font-weight:bold;background:#f8f5fb"><tr>';
   html+='<td colspan="4" style="text-align:right;padding:8px 10px;color:#4c1d95">运输类型加权均价 →</td>';
-  html+='<td style="padding:8px 10px;color:#1565c0">'+r2(sumAB,totalAB)+'</td>';
-  html+='<td style="padding:8px 10px;color:#1565c0">'+r2(sumAD,totalAD)+'</td>';
-  html+='<td style="padding:8px 10px;color:#2ECC71">'+r2(sumS,totalS)+'</td>';
-  html+='<td style="padding:8px 10px;color:#c62828">'+r2(sumEU,totalEU)+'</td>';
-  html+='<td style="padding:8px 10px;color:#c62828">'+r2(sumEA,totalEA)+'</td>';
-  html+='<td style="padding:8px 10px;color:#c62828">'+r2(sumEN,totalEN)+'</td>';
+  if(showCols.空运保税仓)html+='<td style="padding:8px 10px;color:#1565c0">'+r2(sumAB,totalAB)+'</td>';
+  if(showCols.空运直发)html+='<td style="padding:8px 10px;color:#1565c0">'+r2(sumAD,totalAD)+'</td>';
+  if(showCols.海运国内)html+='<td style="padding:8px 10px;color:#2E7D32">'+r2(sumSD,totalSD)+'</td>';
+  if(showCols.海运孟加拉)html+='<td style="padding:8px 10px;color:#2E7D32">'+r2(sumSB,totalSB)+'</td>';
+  if(showCols.快递168UPS)html+='<td style="padding:8px 10px;color:#c62828">'+r2(sumEU,totalEU)+'</td>';
+  if(showCols.快递168aramex)html+='<td style="padding:8px 10px;color:#c62828">'+r2(sumEA,totalEA)+'</td>';
+  if(showCols.快递普通)html+='<td style="padding:8px 10px;color:#c62828">'+r2(sumEN,totalEN)+'</td>';
   html+='<td></td>';
   html+='</tr></tfoot></table></div>';
   el.innerHTML=html;
