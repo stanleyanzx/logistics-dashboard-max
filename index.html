@@ -1058,6 +1058,12 @@ function t1ShowTimeline(gid,inNo,boxNo,boxIdx){
   area.innerHTML=html;
 }
 // Tab1 SKU明细表
+// 关联顶部筛选：按 t1Filters 筛选后的 boxData 构建"入库单号+箱号"白名单，SKU 必须在白名单内才显示
+function t1GetValidBoxKeys(){
+  var keys={};
+  boxData.filter(t1FilterBox).forEach(function(d){keys[d['入库单号']+'|'+d['箱号']]=true;});
+  return keys;
+}
 var t1DetailState={page:1,pageSize:50,search:'',status:'',abnormal:'',sortField:'入库单号',sortDir:'asc'};
 function t1OnSearch(){t1DetailState.search=document.getElementById('t1-searchInput').value;t1DetailState.status=document.getElementById('t1-searchStatus').value;t1DetailState.abnormal=document.getElementById('t1-searchAbnormal').value;t1DetailState.page=1;t1RenderDetail();}
 function t1HasAnomaly(d,b,type){if(!b)return false;var v=String(b[type]||'').trim();return v&&v!=='无异常';}
@@ -1066,7 +1072,9 @@ function t1SortBy(f){if(t1DetailState.sortField===f){t1DetailState.sortDir=t1Det
 function t1GoPage(p){t1DetailState.page=p;t1RenderDetail();}
 function t1RenderDetail(){
   var s=t1DetailState.search.toLowerCase().trim();var kws=s?s.split(/[\s,，]+/).filter(function(k){return k;}):[];
+  var validBoxKeys=t1GetValidBoxKeys();
   var filtered=skuData.filter(function(d){
+    if(!validBoxKeys[d['入库单号']+'|'+d['箱号']])return false;
     if(t1DetailState.status&&d['物流状态']!==t1DetailState.status)return false;
     if(!t1FilterAbnormal(d))return false;
     if(kws.length){var hay=(d['入库单号']+' '+d['赫特SKU']+' '+d['第三方SKU']+' '+d['产品名称']+' '+d['运单号']).toLowerCase();var m=false;for(var i=0;i<kws.length;i++){if(hay.indexOf(kws[i])>-1){m=true;break;}}if(!m)return false;}
@@ -1087,7 +1095,8 @@ function t1RenderDetail(){
 }
 function t1ExportDetail(){
   var s=t1DetailState.search.toLowerCase().trim();var kws=s?s.split(/[\s,，]+/).filter(function(k){return k;}):[];
-  var filtered=skuData.filter(function(d){if(t1DetailState.status&&d['物流状态']!==t1DetailState.status)return false;if(!t1FilterAbnormal(d))return false;if(kws.length){var hay=(d['入库单号']+' '+d['赫特SKU']+' '+d['产品名称']+' '+d['运单号']).toLowerCase();var m=false;for(var i=0;i<kws.length;i++){if(hay.indexOf(kws[i])>-1){m=true;break;}}if(!m)return false;}return true;});
+  var validBoxKeys=t1GetValidBoxKeys();
+  var filtered=skuData.filter(function(d){if(!validBoxKeys[d['入库单号']+'|'+d['箱号']])return false;if(t1DetailState.status&&d['物流状态']!==t1DetailState.status)return false;if(!t1FilterAbnormal(d))return false;if(kws.length){var hay=(d['入库单号']+' '+d['赫特SKU']+' '+d['产品名称']+' '+d['运单号']).toLowerCase();var m=false;for(var i=0;i<kws.length;i++){if(hay.indexOf(kws[i])>-1){m=true;break;}}if(!m)return false;}return true;});
   var cols=['入库单号','箱号','赫特SKU','产品名称','计划数量','上架数量','未上架数量','发货仓','目的仓','团队','物流状态','异常类型','运单号'];
   var csv='\uFEFF'+cols.join(',')+'\n';
   filtered.forEach(function(d){csv+=cols.map(function(c){var v=c==='异常类型'?anomalyText(d):(d[c]||'');return '"'+String(v).replace(/"/g,'""')+'"';}).join(',')+'\n';});
@@ -2083,10 +2092,10 @@ function t3RenderBoxCost(){
     if(t3Filters.dateEnd&&r['提货日期']>t3Filters.dateEnd)return false;
     return true;
   });
-  // 海运按目的地分类拆分（国内/孟加拉）
+  // 海运按发货地拆分（国内/孟加拉）：168=孟加拉/国外，其他=国内
   function getSeaTypeKey(r){
-    var destCat=r['目的地分类']||'';
-    return destCat.indexOf('孟加拉')!==-1?'海运孟加拉':'海运国内';
+    var origin=(r['发货地']||'').toString().trim();
+    return origin==='168'?'海运孟加拉':'海运国内';
   }
   // 统计各运输类型总件数（用于智能隐藏0件数列）
   var totalByType={空运保税仓:0,空运直发:0,海运国内:0,海运孟加拉:0,快递168UPS:0,快递168aramex:0,快递普通:0};
